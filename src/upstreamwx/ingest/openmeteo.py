@@ -9,7 +9,7 @@ window max apparent temperature; cold/wet takes the egress-relevant minimum.
 from __future__ import annotations
 
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 
 import requests
 
@@ -65,11 +65,20 @@ def _query(lat: float, lon: float, *, timeout: float = 30.0, attempts: int = _MA
     raise last_exc
 
 
+def _to_utc_naive(dt: datetime) -> datetime:
+    """Return a UTC-naive datetime for comparing with Open-Meteo's naive UTC times."""
+    if dt.tzinfo is not None:
+        return dt.astimezone(UTC).replace(tzinfo=None)
+    return dt
+
+
 def _in_window(times: list[str], start: datetime, end: datetime) -> list[int]:
+    start_cmp = _to_utc_naive(start)
+    end_cmp   = _to_utc_naive(end)
     idx = []
     for i, t in enumerate(times):
         ts = datetime.fromisoformat(t)
-        if start <= ts <= end:
+        if start_cmp <= ts <= end_cmp:
             idx.append(i)
     return idx
 
@@ -93,7 +102,8 @@ def fetch(mission: Mission, bundle: IngestBundle) -> None:
         bundle.measurable_precip = win_precip >= _MEASURABLE_IN
 
     # Antecedent wetness: significant precip in the hours before the window.
-    prior = [i for i, t in enumerate(times) if datetime.fromisoformat(t) < mission.window_start]
+    start_cmp = _to_utc_naive(mission.window_start)
+    prior = [i for i, t in enumerate(times) if datetime.fromisoformat(t) < start_cmp]
     prior_precip = sum(precip[i] for i in prior[-72:] if precip[i] is not None)
     bundle.antecedent_precip_24_72h = prior_precip >= _ANTECEDENT_IN
 
