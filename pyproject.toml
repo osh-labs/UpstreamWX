@@ -24,7 +24,11 @@ dependencies = [
     "requests",
     "pydantic-settings",
     "pyyaml",
+    "anthropic",
 ]
+
+[project.scripts]
+upstreamwx = "upstreamwx.sitrep.cli:main"
 
 [project.optional-dependencies]
 dev = [

@@ -51,6 +51,16 @@ AGREE_PRESENT_PCT = 20.0
 AGREE_STRONG_PCT = 50.0
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Treat a naive datetime as UTC so it can be compared with the cycle/now clock.
+
+    Mission windows from the engine and CLI are timezone-naive, while the HREF cycle
+    init time and ``now`` are UTC-aware; without this the subtraction raises a
+    TypeError (offset-naive vs offset-aware).
+    """
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
 def forecast_hour_for_window(
     cycle_init: datetime,
     window_start: datetime,
@@ -65,7 +75,10 @@ def forecast_hour_for_window(
     the window's lead from ``now`` falls in the same-day supplement band and the
     forecast hour is within the HREF horizon; otherwise SREF alone covers it.
     """
-    now = now or datetime.now(UTC)
+    now = _as_utc(now) if now is not None else datetime.now(UTC)
+    cycle_init = _as_utc(cycle_init)
+    window_start = _as_utc(window_start)
+    window_end = _as_utc(window_end)
     mid = window_start + (window_end - window_start) / 2
     fhour = round((mid - cycle_init).total_seconds() / 3600.0)
 

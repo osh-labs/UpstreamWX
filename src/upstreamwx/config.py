@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -34,6 +35,12 @@ class Settings(BaseSettings):
     # The NWS API (api.weather.gov) requires a self-identifying User-Agent with a
     # contact (FR-5). Override via UPSTREAMWX_NWS_USER_AGENT to your own contact.
     nws_user_agent: str = "UpstreamWX/0.1 (+https://upstreamwx.com)"
+
+    # Anthropic API key for the M0.2 SITREP Haiku framing layer (FR-21). Read from the
+    # standard ANTHROPIC_API_KEY name; the validation_alias bypasses the env_prefix above.
+    anthropic_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY")
+    )
 
     def ensure_data_dir(self) -> Path:
         """Create and return the data cache directory."""
