@@ -21,9 +21,13 @@ class IngestBundle:
     # NWS products + AFD (FR-5).
     flash_flood_warning: bool = False
     flash_flood_watch: bool = False
+    flood_warning: bool = False
+    flood_advisory: bool = False
+    flood_watch: bool = False
     thunderstorm_warning: bool = False
     afd_text: str | None = None
     afd_convective_mention: bool = False
+    afd_flood_mention: bool = False
 
     # Open-Meteo derived fields (FR-6), already in deg F / mph / inch.
     heat_index_f: float | None = None
@@ -74,6 +78,9 @@ def to_hazard_inputs(bundle: IngestBundle, *, dry_party: bool = False) -> Hazard
     return HazardInputs(
         flash_flood_warning=bundle.flash_flood_warning,
         flash_flood_watch=bundle.flash_flood_watch,
+        flood_warning=bundle.flood_warning,
+        flood_advisory=bundle.flood_advisory,
+        flood_watch=bundle.flood_watch,
         thunderstorm_warning=bundle.thunderstorm_warning,
         sref_p_precip=bundle.sref_p_precip,
         sref_p_tstm=bundle.sref_p_tstm,
@@ -86,6 +93,7 @@ def to_hazard_inputs(bundle: IngestBundle, *, dry_party: bool = False) -> Hazard
         source_agreement=bundle.source_agreement,
         spc_category=bundle.spc_category,
         afd_convective_mention=bundle.afd_convective_mention,
+        afd_flood_mention=bundle.afd_flood_mention,
         heat_index_f=bundle.heat_index_f,
         apparent_temp_f=bundle.apparent_temp_f,
         wind_mph=bundle.wind_mph,

@@ -243,8 +243,12 @@ def _render_source_data(lines: list[str], bundle: IngestBundle | None) -> None:
     lines.append("Active NWS products:")
     lines.append(f"- Flash Flood Warning: {_yn(bundle.flash_flood_warning)}")
     lines.append(f"- Flash Flood Watch: {_yn(bundle.flash_flood_watch)}")
+    lines.append(f"- Flood Warning: {_yn(bundle.flood_warning)}")
+    lines.append(f"- Flood Advisory: {_yn(bundle.flood_advisory)}")
+    lines.append(f"- Flood Watch: {_yn(bundle.flood_watch)}")
     lines.append(f"- Thunderstorm Warning: {_yn(bundle.thunderstorm_warning)}")
     lines.append(f"- AFD convective mention: {_yn(bundle.afd_convective_mention)}")
+    lines.append(f"- AFD excessive-rain / flood mention: {_yn(bundle.afd_flood_mention)}")
     lines.append(f"- SPC outlook: {bundle.spc_category or 'n/a'}")
 
     lines.append("")

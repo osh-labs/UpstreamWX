@@ -10,6 +10,27 @@ cases:
   - id: watch_to_high
     inputs: {flash_flood_watch: true, sref_p_precip: 0}
     expect: high
+  - id: flood_warning_to_high
+    inputs: {flood_warning: true, sref_p_precip: 0}
+    expect: high
+  - id: flood_advisory_to_elevated
+    inputs: {flood_advisory: true, sref_p_precip: 0}
+    expect: elevated
+  - id: flood_watch_to_elevated
+    inputs: {flood_watch: true, sref_p_precip: 0}
+    expect: elevated
+  - id: lesser_product_does_not_suppress_high_sref
+    inputs: {flood_advisory: true, sref_p_precip: 65, measurable_precip: true}
+    expect: high
+  - id: afd_flood_mention_raises_to_elevated
+    inputs: {sref_p_precip: 5, measurable_precip: false, afd_flood_mention: true}
+    expect: elevated
+  - id: afd_flood_mention_does_not_lower_high
+    inputs: {flood_warning: true, afd_flood_mention: true, sref_p_precip: 0}
+    expect: high
+  - id: flood_warning_plus_afd_excessive_rain
+    inputs: {flood_warning: true, afd_flood_mention: true, sref_p_precip: 30, measurable_precip: true}
+    expect: high
   - id: prob_high_lower_edge
     inputs: {sref_p_precip: 60, measurable_precip: true}
     expect: high

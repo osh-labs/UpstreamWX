@@ -43,6 +43,42 @@ def test_to_hazard_inputs_maps_fields():
     assert inputs.member_support == {"flash_flood": 0.55}
 
 
+def test_to_hazard_inputs_maps_flood_products_and_afd():
+    bundle = IngestBundle(
+        flood_warning=True,
+        flood_advisory=True,
+        flood_watch=True,
+        afd_flood_mention=True,
+    )
+    inputs = to_hazard_inputs(bundle)
+    assert inputs.flood_warning is True
+    assert inputs.flood_advisory is True
+    assert inputs.flood_watch is True
+    assert inputs.afd_flood_mention is True
+
+
+def test_nws_fetch_parses_flood_products_and_afd(monkeypatch):
+    # Areal Flood Warning + Flash Flood Watch + an irrelevant Coastal Flood
+    # Advisory; the AFD discusses excessive rainfall. The flash family must not
+    # double-count as an areal Flood Warning, and coastal flooding must not fire.
+    from upstreamwx.ingest import nws
+
+    events = ["Flash Flood Watch", "Flood Warning", "Coastal Flood Advisory"]
+    afd = "...HEAVY RAIN... Excessive rainfall and training thunderstorms likely."
+    monkeypatch.setattr(nws, "active_alerts", lambda *a, **k: events)
+    monkeypatch.setattr(nws, "latest_afd", lambda *a, **k: afd)
+
+    bundle = IngestBundle()
+    nws.fetch(_mission(), bundle)
+
+    assert bundle.flash_flood_watch is True
+    assert bundle.flash_flood_warning is False
+    assert bundle.flood_warning is True       # areal Flood Warning matched
+    assert bundle.flood_advisory is False     # Coastal Flood Advisory excluded
+    assert bundle.flood_watch is False
+    assert bundle.afd_flood_mention is True
+
+
 def test_gather_degrades_gracefully(monkeypatch):
     # All sources raise; gather must not raise and must flag the failures (NFR-6).
     from upstreamwx.ingest import nws, openmeteo, spc, sref_provider
