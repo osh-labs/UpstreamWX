@@ -19,6 +19,10 @@ const ACK_KEY = "uwx.ack.v1"; // first-run acknowledgment (FR-31)
 const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+// 24-hour clock with a colon: "1300" -> "13:00", "1300–1400" -> "13:00–14:00".
+// Only rewrites bare HHMM tokens, so years/HUC codes are left alone.
+const fmtClock = (s) => String(s).replace(/\b(\d{2})(\d{2})\b/g, "$1:$2");
+
 let state = { briefing: null, fromCache: false, tab: "overview", mapInitialized: false };
 
 /* ── Acronym glossary (Resources card + tap-to-define) ─────────────────
@@ -190,13 +194,13 @@ function confidenceTag(level, big = false) {
 /* ── 7.1/7.3 Header + mission card ─────────────────────────────────── */
 function renderHeader(b) {
   const m = b.mission;
-  const actIcon = m.activity === "cave" ? icon("cave", "brand__mark") : icon("canyon", "brand__mark");
+  const actSrc = m.activity === "cave" ? "icons/cave.png" : "icons/canyon.png";
   document.getElementById("header").innerHTML = `
     <div class="brand">
       <img src="icons/logo.jpg" class="brand__logo" alt="UpstreamWX Weather Briefing" />
     </div>
     <div class="app-header__spacer"></div>
-    <span class="activity-pill">${actIcon}${esc(m.activity)}</span>
+    <span class="activity-pill"><img src="${actSrc}" class="activity-pill__icon" alt="" />${esc(m.activity)}</span>
   `;
 }
 
@@ -257,7 +261,7 @@ function selectTab(id) {
 function renderOverview(b) {
   const hazards = b.bluf
     .map((h) => {
-      const win = h.window ? `<span class="hazard-line__window">${esc(h.window)}</span>` : "";
+      const win = h.window ? `<span class="hazard-line__window">${esc(fmtClock(h.window))}</span>` : "";
       return `<button class="hazard-line" data-goto="hazards">
         ${icon(h.hazard, "hazard-line__icon")}
         <div class="hazard-line__body">
@@ -282,7 +286,7 @@ function renderOverview(b) {
     .map(
       (p) => `<div class="phase-seg">
         <div class="phase-seg__name">${PHASE_LABELS[p.phase]}</div>
-        <div class="phase-seg__time">${esc(p.window)}</div>
+        <div class="phase-seg__time">${esc(fmtClock(p.window))}</div>
         <div class="phase-seg__lead">${esc(p.lead_label)}</div>
         <div class="phase-seg__hazards">${esc(p.applicable)}</div>
         ${p.note ? `<div class="phase-seg__note">${esc(p.note)}</div>` : ""}
@@ -316,7 +320,8 @@ function renderOverview(b) {
 /* ── 7.6 Forecast ──────────────────────────────────────────────────── */
 function renderForecast(b) {
   const f = b.forecast_hourly;
-  const head = `<tr><th>Hour</th>${f.hours.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
+  const hours = f.hours.map(fmtClock);
+  const head = `<tr><th>Hour</th>${hours.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
   const rows = f.rows
     .map((r) => `<tr><td>${esc(r.label)}</td>${r.values.map((v) => `<td>${esc(v)}</td>`).join("")}</tr>`)
     .join("");
@@ -335,12 +340,12 @@ function renderForecast(b) {
     </section>
     <section class="card">
       <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (°F)</h2>
-      ${lineChart([b.temp_series.air, b.temp_series.feels], f.hours, ["var(--sev-high)", "var(--sev-extreme)"])}
+      ${lineChart([b.temp_series.air, b.temp_series.feels], hours, ["var(--sev-high)", "var(--sev-extreme)"])}
       <div class="chart-caption">Air (orange) · Feels-like (red)</div>
     </section>
     <section class="card">
       <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (mph)</h2>
-      ${lineChart([b.wind_series.wind, b.wind_series.gust], f.hours, ["var(--color-brand)", "var(--color-text-muted)"])}
+      ${lineChart([b.wind_series.wind, b.wind_series.gust], hours, ["var(--color-brand)", "var(--color-text-muted)"])}
       <div class="chart-caption">Wind (cyan) · Gusts (grey)</div>
     </section>
     <div class="disclaimer">Forecast detail is the drill-down behind the hazard drivers. Derived fields from Open-Meteo (HRRR-derived); ensemble probabilities from in-house SREF + HREF.</div>`;
@@ -393,9 +398,12 @@ function lineChart(series, labels, colors) {
     return `<path d="${d}" fill="none" stroke="${colors[si]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
   }).join("");
 
-  const ticks = labels.map((l, i) =>
-    `<text x="${xFn(i)}" y="${H - 5}" fill="var(--color-text-muted)" font-size="9" text-anchor="middle">${esc(l)}</text>`
-  ).join("");
+  // Anchor the first label to its start and the last to its end so neither
+  // overruns the chart edge (the rightmost label was being clipped).
+  const ticks = labels.map((l, i) => {
+    const anchor = i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle";
+    return `<text x="${xFn(i)}" y="${H - 5}" fill="var(--color-text-muted)" font-size="9" text-anchor="${anchor}">${esc(l)}</text>`;
+  }).join("");
 
   // Crosshair overlay — sits on top of lines; hidden until interaction
   const xhHLines = colors.map((c, si) =>
@@ -516,6 +524,17 @@ function barClass(cell) {
   return `timeline__bar bar-${cell.severity} ${w} ${conf}`;
 }
 
+// Render the engine's threshold logic as one tier per line, with the internal
+// appendix/section citation stripped (user-facing copy carries no references).
+function thresholdLogicHtml(logic) {
+  const lines = String(logic)
+    .replace(/\s*\((?:Appendix B|§)[^)]*\)/g, "")
+    .split(";")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return `<ul class="logic-list">${lines.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
+}
+
 function renderHazards(b) {
   const phaseHead = `<div></div>${["approach", "technical", "egress"]
     .map((p) => `<div class="timeline__phase-head">${PHASE_LABELS[p]}</div>`)
@@ -553,7 +572,7 @@ function renderHazards(b) {
         <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
         <h4>Threshold logic</h4>
-        <p style="font-size:var(--text-label);color:var(--color-text-secondary);margin:var(--space-1) 0 0">${esc(h.logic)}</p>
+        ${thresholdLogicHtml(h.logic)}
         ${h.assumptions.map((a) => `<div class="assumption">${icon("alert", "")}<span>${esc(a)}</span></div>`).join("")}
       </div>
     </details>`
@@ -578,7 +597,7 @@ function renderHazards(b) {
 function renderMap(b) {
   document.getElementById("view-map").innerHTML = `
     <div id="leaflet-map" aria-label="Mission area topographic map"></div>
-    <div class="disclaimer">Planning map — dark topographic basemap via Esri. The shaded basin is the upstream watershed feeding the mission point; tap either for details. No radar layer in v1.</div>`;
+    <div class="disclaimer">Planning map. The shaded basin is the approximate upstream watershed feeding the mission point. Tap either for details.</div>`;
 }
 
 let _leafletMap = null;

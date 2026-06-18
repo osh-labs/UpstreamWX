@@ -10,7 +10,7 @@
  * New briefing generation requires connectivity (FR-28); offline is review-only.
  */
 
-const VERSION = "uwx-v6";
+const VERSION = "uwx-v7";
 const SHELL = `${VERSION}-shell`;
 const DATA = `${VERSION}-data`;
 
@@ -23,6 +23,8 @@ const SHELL_ASSETS = [
   "js/app.js",
   "js/icons.js",
   "icons/icon.svg",
+  "icons/cave.png",
+  "icons/canyon.png",
 ];
 
 self.addEventListener("install", (event) => {
