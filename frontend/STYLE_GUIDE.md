@@ -259,9 +259,12 @@ the noted class. Visual contract first; PRD reference in parentheses.
   dot. Sizes: `.is-lg` (header/overview), default (inline).
 - Heat variant uses the heat ramp + the NWS category label.
 
-### 7.5 Confidence tag (`.confidence-tag`) — FR-36
-- Small label `High|Moderate|Low confidence`, paired with a 12 px swatch showing
-  solid vs. hatched fill so the timeline encoding is legible out of context.
+### 7.5 Confidence bar (`.confidence`) — FR-36
+- A solid-orange (`--sev-high`) bar the same width as the posture pill it sits
+  under, with the small gray label `High|Moderate|Low confidence` centered below.
+- Encodes confidence by **line thickness, not hue** (FR-36 — style, not hue):
+  `is-low` 2 px · `is-moderate` 5 px · `is-high` 9 px, vertically centered in a
+  fixed-height track so rows don't jump. Non-interactive — set by the engine.
 
 ### 7.6 Metric card (`.metric-card`) — Appendix D §18.2
 - Grid of glanceable cards: label (caption), big value (`--text-display`, mono),
