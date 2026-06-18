@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Optional override for the SREF source base URL once Spike A pins it.
     sref_base_url: str | None = None
 
+    # Optional override for the HREF source base URL (same-day supplement, Spike C).
+    href_base_url: str | None = None
+
     def ensure_data_dir(self) -> Path:
         """Create and return the data cache directory."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
