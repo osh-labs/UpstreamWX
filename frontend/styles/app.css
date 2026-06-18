@@ -620,6 +620,8 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .hazard-detail__body ul { margin: 0; padding-left: var(--space-4); }
 .hazard-detail__body li { font-size: var(--text-label); color: var(--color-text-secondary); margin: 2px 0; }
+.hazard-detail__body .logic-list { margin-top: var(--space-2); }
+.hazard-detail__body .logic-list li { margin: var(--space-1) 0; }
 
 .assumption {
   display: flex;
@@ -730,6 +732,27 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 .map-tooltip::before {
   border-top-color: var(--color-border-strong) !important;
 }
+
+/* Dark-mode Leaflet chrome: zoom control + attribution credits. */
+.leaflet-bar {
+  border: 1px solid var(--color-border-strong) !important;
+  box-shadow: var(--shadow-pop);
+}
+.leaflet-control-zoom a {
+  background: var(--color-surface) !important;
+  color: var(--color-text) !important;
+  border-bottom-color: var(--color-border) !important;
+}
+.leaflet-control-zoom a:hover {
+  background: var(--color-surface-2) !important;
+  color: var(--color-text) !important;
+}
+.leaflet-control-attribution {
+  background: var(--color-overlay) !important;
+  color: var(--color-text-muted) !important;
+  backdrop-filter: blur(6px);
+}
+.leaflet-control-attribution a { color: var(--color-text-secondary) !important; }
 
 /* Click popups for the mission point + watershed (FR — selectable map features). */
 .map-popup .leaflet-popup-content-wrapper {
