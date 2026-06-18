@@ -197,37 +197,139 @@ function renderForecast(b) {
       <div class="chart-caption">Wind (cyan) · Gusts (grey)</div>
     </section>
     <div class="disclaimer">Forecast detail is the drill-down behind the hazard drivers. Derived fields from Open-Meteo (HRRR-derived); ensemble probabilities from in-house SREF + HREF.</div>`;
+  flushChartInits();
 }
 
-// Minimal dependency-free SVG line chart.
+let _chartSeq = 0;
+const _pendingCharts = [];
+
+// Interactive SVG line chart with touch/mouse crosshair.
 function lineChart(series, labels, colors) {
+  const id = `chart-${++_chartSeq}`;
   const W = 320, H = 128;
   const padL = 30, padR = 8, padT = 8, padB = 20;
   const all = series.flat();
   const min = Math.min(...all), max = Math.max(...all);
   const span = max - min || 1;
-  const x = (i) => padL + (i * (W - padL - padR)) / (labels.length - 1);
-  const y = (v) => padT + (1 - (v - min) / span) * (H - padT - padB);
+  const xFn = (i) => padL + (i * (W - padL - padR)) / (labels.length - 1);
+  const yFn = (v) => padT + (1 - (v - min) / span) * (H - padT - padB);
 
   const GRID_N = 4;
   const grids = Array.from({ length: GRID_N }, (_, i) => {
     const frac = i / (GRID_N - 1);
     const val = min + frac * span;
-    const yp = y(val).toFixed(1);
+    const yp = yFn(val).toFixed(1);
     return `<line x1="${padL}" y1="${yp}" x2="${W - padR}" y2="${yp}" stroke="var(--color-border)" stroke-width="1"/>
       <text x="${padL - 3}" y="${yp}" fill="var(--color-text-muted)" font-size="8" text-anchor="end" dominant-baseline="middle">${Math.round(val)}</text>`;
   }).join("");
 
-  const lines = series
-    .map((s, si) => {
-      const d = s.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
-      return `<path d="${d}" fill="none" stroke="${colors[si]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
-    })
-    .join("");
-  const ticks = labels
-    .map((l, i) => `<text x="${x(i)}" y="${H - 5}" fill="var(--color-text-muted)" font-size="9" text-anchor="middle">${esc(l)}</text>`)
-    .join("");
-  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${grids}${ticks}${lines}</svg>`;
+  const lines = series.map((s, si) => {
+    const d = s.map((v, i) => `${i ? "L" : "M"}${xFn(i).toFixed(1)} ${yFn(v).toFixed(1)}`).join(" ");
+    return `<path d="${d}" fill="none" stroke="${colors[si]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+  }).join("");
+
+  const ticks = labels.map((l, i) =>
+    `<text x="${xFn(i)}" y="${H - 5}" fill="var(--color-text-muted)" font-size="9" text-anchor="middle">${esc(l)}</text>`
+  ).join("");
+
+  // Crosshair overlay — sits on top of lines; hidden until interaction
+  const xhHLines = colors.map((c, si) =>
+    `<line data-xh="hl" data-si="${si}" x1="${padL}" y1="0" x2="${padL}" y2="0" stroke="${c}" stroke-width="1" opacity="0.55" stroke-dasharray="2 3"/>`
+  ).join("");
+  const xhDots = colors.map((c, si) =>
+    `<circle data-xh="dot" data-si="${si}" r="4" fill="${c}" stroke="var(--color-surface)" stroke-width="1.5" cx="-99" cy="-99"/>`
+  ).join("");
+  const xhVals = colors.map((c, si) =>
+    `<text data-xh="val" data-si="${si}" font-size="9" font-weight="600" fill="${c}" dominant-baseline="middle" x="-99" y="-99"></text>`
+  ).join("");
+
+  const xhair = `<g data-xh="group" visibility="hidden" pointer-events="none">
+    <line data-xh="v" x1="0" x2="0" y1="${padT}" y2="${H - padB}" stroke="var(--color-text-muted)" stroke-width="1" opacity="0.4"/>
+    ${xhHLines}${xhDots}${xhVals}
+    <rect data-xh="xlabel-bg" fill="var(--color-surface-3)" rx="2" height="11" y="${H - padB + 2}" x="0" width="16"/>
+    <text data-xh="xlabel" font-size="9" font-weight="600" fill="var(--color-text)" text-anchor="middle" y="${H - 5}" x="0"></text>
+  </g>`;
+
+  _pendingCharts.push({ id, series, labels, min, span, W, H, padL, padR, padT, padB });
+  return `<svg id="${id}" class="chart" viewBox="0 0 ${W} ${H}" role="img">${grids}${ticks}${lines}${xhair}</svg>`;
+}
+
+function flushChartInits() {
+  _pendingCharts.forEach(initChartInteractivity);
+  _pendingCharts.length = 0;
+}
+
+function initChartInteractivity({ id, series, labels, min, span, W, H, padL, padR, padT, padB }) {
+  const svg = document.getElementById(id);
+  if (!svg) return;
+
+  const group   = svg.querySelector('[data-xh="group"]');
+  const vLine   = svg.querySelector('[data-xh="v"]');
+  const xlabel  = svg.querySelector('[data-xh="xlabel"]');
+  const xlbg    = svg.querySelector('[data-xh="xlabel-bg"]');
+  const hLines  = [...svg.querySelectorAll('[data-xh="hl"]')];
+  const dots    = [...svg.querySelectorAll('[data-xh="dot"]')];
+  const vals    = [...svg.querySelectorAll('[data-xh="val"]')];
+
+  const dataW = W - padL - padR;
+  const dataH = H - padT - padB;
+  const yFn = (v) => padT + (1 - (v - min) / span) * dataH;
+
+  function update(clientX) {
+    const rect = svg.getBoundingClientRect();
+    const svgX = ((clientX - rect.left) / rect.width) * W;
+    const i = Math.max(0, Math.min(labels.length - 1, Math.round((svgX - padL) * (labels.length - 1) / dataW)));
+    const cx = padL + (i * dataW) / (labels.length - 1);
+
+    // Vertical line
+    vLine.setAttribute("x1", cx); vLine.setAttribute("x2", cx);
+
+    // X label with fitted background
+    const lbl = labels[i];
+    const bgW = lbl.length * 6 + 4;
+    xlbg.setAttribute("x", cx - bgW / 2); xlbg.setAttribute("width", bgW);
+    xlabel.setAttribute("x", cx); xlabel.textContent = lbl;
+
+    series.forEach((s, si) => {
+      const v = s[i];
+      const cy = yFn(v);
+
+      // Horizontal guide from Y-axis to dot
+      hLines[si].setAttribute("y1", cy); hLines[si].setAttribute("y2", cy);
+      hLines[si].setAttribute("x2", cx);
+
+      // Dot at intersection
+      dots[si].setAttribute("cx", cx); dots[si].setAttribute("cy", cy);
+
+      // Value label: right of dot in left half, left of dot in right half
+      // Offset second series down if values crowd each other
+      const crowd = si === 1 && Math.abs(yFn(s[i]) - yFn(series[0][i])) < 11;
+      const labelY = cy + (crowd ? 11 : 0);
+      const inRight = cx > W / 2;
+      vals[si].setAttribute("x", inRight ? cx - 7 : cx + 7);
+      vals[si].setAttribute("text-anchor", inRight ? "end" : "start");
+      vals[si].setAttribute("y", labelY);
+      vals[si].textContent = Math.round(v);
+    });
+
+    group.setAttribute("visibility", "visible");
+  }
+
+  function hide() { group.setAttribute("visibility", "hidden"); }
+
+  let captured = false;
+  svg.addEventListener("pointerdown", (e) => {
+    captured = true;
+    svg.setPointerCapture(e.pointerId);
+    update(e.clientX);
+  });
+  svg.addEventListener("pointermove", (e) => {
+    // Show on mouse hover without press; show on any captured (touch) drag
+    if (e.pointerType === "mouse" || captured) update(e.clientX);
+  });
+  svg.addEventListener("pointerup",     () => { captured = false; });
+  svg.addEventListener("pointercancel", () => { captured = false; hide(); });
+  svg.addEventListener("pointerleave",  () => { if (!captured) hide(); });
 }
 
 /* ── 7.9 Hazards (phase-primary timeline + details) ────────────────── */

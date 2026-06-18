@@ -628,7 +628,7 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .fc-table thead th { color: var(--color-text-muted); }
 
-.chart { width: 100%; height: auto; display: block; }
+.chart { width: 100%; height: auto; display: block; touch-action: none; cursor: crosshair; }
 .chart-caption { font-size: var(--text-caption); color: var(--color-text-muted); text-align: center; }
 
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
