@@ -25,10 +25,14 @@ dependencies = [
     "pydantic-settings",
     "pyyaml",
     "anthropic",
+    # M0.3 API: always-on briefing service on the existing EC2 (PRD §7).
+    "fastapi",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
 upstreamwx = "upstreamwx.sitrep.cli:main"
+upstreamwx-api = "upstreamwx.api.app:main"
 
 [project.optional-dependencies]
 dev = [

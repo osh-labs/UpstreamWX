@@ -132,6 +132,8 @@ Build milestones M0.0–M0.5 lead up to **product v1**. The "M" prefix is delibe
 
 **Exit criteria.** API returns briefings identical in content to the CLI for the same inputs; cache hit/miss behaves correctly; scheduled refresh works; validation corpus passes through the API path.
 
+**Build status (this pass).** Delivered and hermetically validated (`docs/m0.3/README.md`): the FastAPI service (`upstreamwx.api` — `POST /v1/briefing`, `GET /v1/health`), the cycle-scoped server-side briefing cache (`upstreamwx.api.cache`, keyed by location/window), and the SREF/AFD cycle arithmetic plus the refresh pass (`upstreamwx.api.cycles` / `BriefingService.refresh_active`, FR-12). The CLI and API now share one generation core (`upstreamwx.sitrep.generate`), so the API is identical to the CLI by construction (FR-13). The **always-on scheduler cadence and cross-restart cache persistence moved to M0.1.1** for the same reason the SREF scheduler did — an ephemeral dev container cannot validate unattended cadence or restart persistence; the host-independent core (endpoint, cache semantics, cycle math, single refresh pass) is built and tested here.
+
 ---
 
 ## M0.4 — PWA Framework: Map Location In → SITREP Out
