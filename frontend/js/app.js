@@ -422,7 +422,7 @@ function renderHazards(b) {
         ${icon("chevron", "hazard-detail__chev")}
       </summary>
       <div class="hazard-detail__body">
-        <div style="margin-top:var(--space-3)">${confidenceTag(h.confidence)}</div>
+        <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
         <h4>Threshold logic</h4>
         <p style="font-size:var(--text-label);color:var(--color-text-secondary);margin:var(--space-1) 0 0">${esc(h.logic)}</p>

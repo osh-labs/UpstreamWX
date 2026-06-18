@@ -603,6 +603,14 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   padding: 0 var(--space-3) var(--space-3);
   border-top: 1px solid var(--color-border);
 }
+/* Line the confidence bar up under the summary's posture pill: right-aligned,
+   clearing the chevron (18px) + its gap so the two equal-width pills stack. */
+.hazard-detail__confidence {
+  display: flex;
+  justify-content: flex-end;
+  padding-right: calc(18px + var(--space-3));
+  margin-top: var(--space-3);
+}
 .hazard-detail__body h4 {
   font-size: var(--text-caption);
   letter-spacing: var(--tracking-wide);
