@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="UpstreamWX">
+  <!-- maskable: full-bleed background, content kept within the central safe zone -->
+  <rect width="512" height="512" rx="96" fill="#0a0e14"/>
+  <!-- upstream hex -->
+  <polygon points="256,96 386,171 386,341 256,416 126,341 126,171"
+           fill="none" stroke="#38bdf8" stroke-width="20" stroke-linejoin="round"/>
+  <!-- converging upstream channels meeting at the mission point -->
+  <g fill="none" stroke="#38bdf8" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M176 168 C 220 220, 236 250, 256 300" opacity="0.9"/>
+    <path d="M336 168 C 292 220, 276 250, 256 300" opacity="0.9"/>
+    <path d="M256 196 L 256 300" opacity="0.6"/>
+  </g>
+  <!-- mission point -->
+  <circle cx="256" cy="312" r="22" fill="#38bdf8"/>
+</svg>

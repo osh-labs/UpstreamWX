@@ -1,0 +1,208 @@
+{
+  "_comment": "Offline sample mirroring BriefingResponse + BriefingResult (src/upstreamwx/api/models.py, engine/models.py). At M0.4 this fetch is swapped for POST /v1/briefing; the render layer is unchanged.",
+  "mission": {
+    "name": "Buckskin Gulch",
+    "activity": "canyon",
+    "is_slot": true,
+    "lat": 37.0192,
+    "lon": -111.9889,
+    "huc12": ["140700060101"],
+    "window_start": "2026-06-20T08:00:00-06:00",
+    "window_end": "2026-06-20T18:00:00-06:00",
+    "phases_inferred": true,
+    "timezone": "MDT"
+  },
+  "overall_posture": "High",
+  "overall_confidence": "Moderate",
+  "threshold_version": "2026-06-16",
+  "generated_at": "2026-06-20T05:41:00-06:00",
+  "cache_cycle": "2026062003z",
+  "framed": true,
+  "cached": false,
+  "degraded": true,
+  "sources_ok": { "nws": true, "open_meteo": true, "sref": true, "href": true, "spc": false },
+  "warnings": ["SPC convective outlook unavailable — lightning posture uses SREF + AFD only (NFR-6)."],
+  "summary": "Afternoon convection is the day's story. SREF puts thunderstorm probability over the upstream watershed in the elevated band, and the same-day HREF sharpens that into a High flash-flood signal for this slot — where even modest rates flood fast. Lightning is High on the exposed approach and egress. Heat reaches Extreme Caution midday; a wet party exiting near dusk faces Elevated cold. Phases were inferred from the overall window. Verify against the linked NWS sources before committing.",
+  "bluf": [
+    {
+      "hazard": "flash_flood",
+      "label": "High",
+      "severity_class": "sev-high",
+      "confidence": "Moderate",
+      "window": "1300–1700",
+      "is_persistent": false
+    },
+    {
+      "hazard": "lightning",
+      "label": "High",
+      "severity_class": "sev-high",
+      "confidence": "Moderate",
+      "window": "1400–1800",
+      "is_persistent": false
+    },
+    {
+      "hazard": "heat",
+      "label": "Extreme Caution",
+      "severity_class": "heat-extreme_caution",
+      "confidence": "High",
+      "window": "1100–1600",
+      "is_persistent": false
+    },
+    {
+      "hazard": "cold_wet",
+      "label": "Elevated",
+      "severity_class": "sev-elevated",
+      "confidence": "High",
+      "window": "1700–1800",
+      "is_persistent": false
+    }
+  ],
+  "metrics": [
+    { "label": "Temp", "icon": "heat", "value": "84", "unit": "°F", "sub": "Feels 88°" },
+    { "label": "Wind", "icon": "cold_wet", "value": "12", "unit": "mph", "sub": "Gust 22" },
+    { "label": "Precip", "icon": "flash_flood", "value": "45", "unit": "%", "sub": "0.4 in" },
+    { "label": "Humidity", "icon": "lightning", "value": "38", "unit": "%", "sub": "CAPE 1800" }
+  ],
+  "phases": [
+    {
+      "phase": "approach",
+      "window": "0800–0900",
+      "thermal_primary": "heat",
+      "lead_label": "Heat — Extreme Caution",
+      "applicable": "Lightning, Heat ↑, Cold",
+      "note": null
+    },
+    {
+      "phase": "technical",
+      "window": "0900–1700",
+      "thermal_primary": "cold_wet",
+      "lead_label": "Flash flood — High",
+      "applicable": "Flash flood, Heat, Cold (no lightning — sheltered)",
+      "note": "Slot canyon: conservative flood fallback applied."
+    },
+    {
+      "phase": "egress",
+      "window": "1700–1800",
+      "thermal_primary": "cold_wet",
+      "lead_label": "Cold/wet — Elevated",
+      "applicable": "Lightning, Cold ↑, Heat",
+      "note": null
+    }
+  ],
+  "timeline": [
+    {
+      "hazard": "flash_flood",
+      "cells": [
+        { "phase": "approach", "applicable": false },
+        { "phase": "technical", "severity": "high", "confidence": "moderate", "persistent": false },
+        { "phase": "egress", "applicable": false }
+      ]
+    },
+    {
+      "hazard": "lightning",
+      "cells": [
+        { "phase": "approach", "severity": "elevated", "confidence": "moderate", "persistent": true },
+        { "phase": "technical", "applicable": false },
+        { "phase": "egress", "severity": "high", "confidence": "low", "persistent": true }
+      ]
+    },
+    {
+      "hazard": "heat",
+      "cells": [
+        { "phase": "approach", "severity": "caution", "confidence": "high", "persistent": true },
+        { "phase": "technical", "severity": "extreme_caution", "confidence": "high", "persistent": true },
+        { "phase": "egress", "severity": "caution", "confidence": "high", "persistent": false }
+      ]
+    },
+    {
+      "hazard": "cold_wet",
+      "cells": [
+        { "phase": "approach", "severity": "minimal", "confidence": "high", "persistent": true },
+        { "phase": "technical", "severity": "minimal", "confidence": "high", "persistent": true },
+        { "phase": "egress", "severity": "elevated", "confidence": "high", "persistent": false }
+      ]
+    }
+  ],
+  "hazard_detail": [
+    {
+      "hazard": "flash_flood",
+      "label": "High",
+      "severity_class": "sev-high",
+      "confidence": "Moderate",
+      "drivers": [
+        "SREF P(precip/thunder) 48% over the upstream HUC-12 domain",
+        "HREF neighborhood P(≥0.5 in/1 h) 44% — same-day high-res sharpening (FR-7a)",
+        "AFD: scattered afternoon thunderstorms, locally heavy rain",
+        "Antecedent precip in prior 24–72 h: none"
+      ],
+      "logic": "Extreme = active Flash Flood Warning; High = Watch OR SREF ≥60% w/ convective rate, OR HREF NEP(≥0.5 in/1 h) ≥40%. Slot fallback: any meaningful slot rate → at least High (Appendix B §16.1).",
+      "assumptions": ["Slot canyon — conservative flood fallback applied; flagged per Appendix B §16.1."]
+    },
+    {
+      "hazard": "lightning",
+      "label": "High",
+      "severity_class": "sev-high",
+      "confidence": "Moderate",
+      "drivers": [
+        "SREF P(thunderstorm) 52% in the egress window",
+        "HREF neighborhood P(lightning) 41% — same-day (FR-7a)",
+        "CAPE 1800 J/kg (moderate instability)",
+        "SPC convective outlook unavailable this cycle (NFR-6)"
+      ],
+      "logic": "High = SREF P(tstm) 40–69% OR SPC Slight/Enhanced during an exposed phase (Appendix B §16.2). Excluded from the technical span — sheltered in-slot (FR-14c).",
+      "assumptions": ["Lightning applies on approach and egress only; the technical span is treated as sheltered (FR-14c)."]
+    },
+    {
+      "hazard": "heat",
+      "label": "Extreme Caution",
+      "severity_class": "heat-extreme_caution",
+      "confidence": "High",
+      "drivers": [
+        "Heat index 95 °F midday (NWS Extreme Caution band, 90–103 °F)",
+        "Apparent temp peaks 1300–1500",
+        "Approach exertion under load — effective strain runs one category hotter"
+      ],
+      "logic": "Uses NWS Heat Index categories directly (FR-15): Caution 80–90 °F, Extreme Caution 90–103 °F, Danger 103–124 °F, Extreme Danger ≥125 °F.",
+      "assumptions": ["Approach advisory: effective heat strain runs one category hotter under load (Appendix B §16.3)."]
+    },
+    {
+      "hazard": "cold_wet",
+      "label": "Elevated",
+      "severity_class": "sev-elevated",
+      "confidence": "High",
+      "drivers": [
+        "Egress apparent temp 56 °F near dusk",
+        "Wind 12 mph, gusts 22 — folded into apparent temperature",
+        "Wet-party assumption on egress (FR-16)"
+      ],
+      "logic": "Elevated = apparent temp 46–60 °F for a wet party — the 'deceptively mild' band (Appendix B §16.4). Bands are warmer than dry-cold thresholds because wet clothing loses insulation.",
+      "assumptions": ["Posture assumes the party exits wet (FR-16); discount ~one tier if the activity stays dry."]
+    }
+  ],
+  "forecast_hourly": {
+    "hours": ["0800", "1000", "1200", "1400", "1600", "1800"],
+    "rows": [
+      { "label": "Sky", "values": ["☀", "⛅", "⛅", "⛈", "⛈", "⛅"] },
+      { "label": "Temp °F", "values": ["72", "80", "84", "83", "81", "76"] },
+      { "label": "Feels °F", "values": ["74", "84", "88", "86", "83", "77"] },
+      { "label": "Wind mph", "values": ["6", "9", "12", "14", "12", "10"] },
+      { "label": "Gust mph", "values": ["12", "16", "22", "26", "22", "18"] },
+      { "label": "Precip %", "values": ["5", "15", "30", "45", "40", "20"] },
+      { "label": "QPF in", "values": ["0.0", "0.0", "0.1", "0.3", "0.2", "0.0"] }
+    ]
+  },
+  "temp_series": {
+    "air": [72, 80, 84, 83, 81, 76],
+    "feels": [74, 84, 88, 86, 83, 77]
+  },
+  "wind_series": {
+    "wind": [6, 9, 12, 14, 12, 10],
+    "gust": [12, 16, 22, 26, 22, 18]
+  },
+  "resources": [
+    { "icon": "doc", "title": "NWS Area Forecast Discussion", "sub": "WFO Salt Lake City (SLC) — verify forecaster reasoning", "url": "https://forecast.weather.gov/product.php?site=SLC&product=AFD&issuedby=SLC" },
+    { "icon": "alert", "title": "Active alerts (watches / warnings)", "sub": "api.weather.gov active alerts for the zone", "url": "https://api.weather.gov/alerts/active?point=37.0192,-111.9889" },
+    { "icon": "model", "title": "Model & ensemble source", "sub": "Open-Meteo (HRRR-derived) · SREF + HREF (NOMADS ensprod, in-house)", "url": "https://open-meteo.com/" },
+    { "icon": "calc", "title": "How this is calculated", "sub": "Versioned threshold matrices — Appendix B (threshold v2026-06-16)", "url": "#" }
+  ]
+}
