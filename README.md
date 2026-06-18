@@ -50,7 +50,16 @@ uv pip install -e ".[dev]"
 # Spike C — HREF same-day high-res probabilities over that polygon (live NOMADS)
 .venv/bin/python spikes/spike_c_href/run_spike_c.py \
     --polygon tests/fixtures/buckskin_huc12.geojson --fhour 12
+
+# M0.2 — mission spec -> Markdown SITREP briefing (offline, from saved inputs)
+.venv/bin/upstreamwx --lat 37.0192 --lon -111.9889 --activity canyon \
+    --start 2026-06-20T08:00 --end 2026-06-20T18:00 --name "Buckskin Gulch" --slot \
+    --inputs tests/fixtures/sitrep/sample_inputs.yaml --no-frame
 ```
+
+The `upstreamwx` command runs the live ingest pipeline by default; `--inputs` renders
+from a saved `HazardInputs` offline. Set `ANTHROPIC_API_KEY` to add Claude Haiku framing
+(`--no-frame` to skip). See [`docs/m0.2/`](docs/m0.2/).
 
 ## Tests & lint
 
@@ -68,10 +77,11 @@ src/upstreamwx/   backend package
   grib/                shared GRIB2 idx byte-range + polygon zonal aggregation
   sref/                Spike A -> M0.1 SREF processor (fetch/extract/aggregate)
   href/                Spike C -> M0.1 HREF same-day supplement (~3 km, ≈6-36 h)
-  engine/ ingest/ sitrep/   placeholders for M0.1-M0.2
+  engine/ ingest/      M0.1 decision engine + data-ingest abstraction
+  sitrep/              M0.2 SITREP renderer + Haiku framing + `upstreamwx` CLI
 spikes/                runnable de-risk CLIs
 tests/                 hermetic suite + committed fixtures
-docs/m0.0/             spike reports + resource profile
+docs/m0.0-m0.2/        spike reports, milestone findings
 frontend/              reserved for the PWA (M0.4)
 ```
 
