@@ -42,6 +42,13 @@ validated. The blocker is **CONUS-wide CN/travel-time coverage**, which needs a
 fallback (self-hosted SSURGO + NLCD, or a national CN grid) for states that
 don't expose the characteristics.
 
+**Follow-up result (delineation):** for the *geometry* itself, the stateless
+**NLDI split-catchment** process matches SS-Delineate to ~1 % (Linville 114.3 vs
+114.7 km²; Zion 747.4 vs 756.3 km²) while being ~7× faster and needing no state
+code — so StreamStats is **not required for delineation**. Its only residual
+value is the SSURGO/NLCD characteristics bundle, which is the regionally-uneven
+part. See "Follow-up — NLDI split-catchment vs SS-Delineate" below.
+
 -----
 
 ## API status confirmed (June 2026)
@@ -239,6 +246,48 @@ Live values, 2026-06-18 (`docs/m0.0/spike-d-streamstats.json`):
 
 -----
 
+## Follow-up — NLDI split-catchment vs SS-Delineate (delineation head-to-head)
+
+Since SS-Delineate's *unique* contribution over our existing tooling is the
+delineation geometry, we tested the obvious stateless alternative:
+**`POST nldi/pygeoapi/processes/nldi-splitcatchment/execution`** (`lat`, `lon`,
+`upstream=True`). It returns `catchment`, `splitCatchment`, and the upstream
+`drainageBasin` polygon — the same NHDPlus backing StreamStats' own tracing uses.
+
+| | NLDI split-catchment | SS-Delineate |
+| --- | --- | --- |
+| Linville drainage basin | **114.3 km²** | 114.7 km² (Δ 0.3 %) |
+| Zion (snapped) drainage basin | **747.4 km²** | 756.3 km² (Δ 1.2 %) |
+| State region code | **not required** | required |
+| Statefulness | stateless | stateless (empty workspace_id) |
+| Latency | **~0.9 s** | ~6–8 s |
+| Bundled characteristics | **none** | area/slope/NLCD/SSURGO (region-dependent) |
+| Snap behaviour | **same fragility** | same fragility |
+| Non-snap signal | **silent** (drops `drainageBasin`) | explicit `WarningMsg` |
+
+**The geometries match to ~1 %** — unsurprising, since both trace NHDPlus. Two
+findings worth recording:
+
+1. **Snap fragility is shared, not a StreamStats quirk.** Zion's *raw* point
+   `37.2794,-112.9481` fails on NLDI too — it returns only a 1.9 km² local
+   catchment and a 0.01 km² `splitCatchment`, **no `drainageBasin`**. The
+   snapped point recovers the full 747 km². So *any* delineator needs the
+   snap-and-nudge step; it is not avoidable by switching to NLDI.
+2. **NLDI fails more quietly.** StreamStats flags an unsnappable point with an
+   explicit `WarningMsg`; NLDI just omits the `drainageBasin` feature. If we use
+   NLDI we must treat "no `drainageBasin` in the response" as the failure
+   signal and trigger the nudge.
+
+**Conclusion:** for the *geometry alone*, SS-Delineate buys us essentially
+nothing over NLDI split-catchment — NLDI is faster, needs no state code, and is
+already a dependency (the Spike B fallback + the flowtrace above). StreamStats'
+only real residual value is the **SSURGO/NLCD characteristics bundle for CN**,
+which is exactly the regionally-uneven part (absent for UT). This sharpens the
+recommendation: lean on NLDI for delineation, and source soil/land-cover for CN
+from a CONUS-complete dataset rather than from SS-Delineate's per-state payload.
+
+-----
+
 ## Corrected cache schema
 
 The probe writes one record per point (`docs/m0.0/spike-d-streamstats.json`).
@@ -278,12 +327,21 @@ Changes from the brief's proposed schema, each traceable to a finding above:
 
 ## Recommendation
 
-1. Adopt StreamStats (SS-Delineate + SS-Hydro) for **delineation and basin
-   characteristics** on cache-on-miss — it works well and matches the pattern.
-2. Compute CN **ourselves** (TR-55 lookup over NLCD × SSURGO); use StreamStats
-   SSURGO where exposed and **a national SSURGO/NLCD fallback where not** (UT and
-   other western states). This fallback is the real remaining work item.
+1. **Delineate with NLDI split-catchment, not SS-Delineate.** The head-to-head
+   shows matching geometry (~1 %), but NLDI is faster (~0.9 s), needs no state
+   code, is stateless, and is already a dependency. Treat "no `drainageBasin` in
+   the response" as the unsnappable signal and run the snap-and-nudge step
+   (shared by both delineators — it is not a StreamStats-only problem). This also
+   upgrades the current WBD HUC-12 trace to pour-point granularity.
+2. Compute CN **ourselves** (TR-55 lookup over NLCD × SSURGO). Because the
+   SSURGO/NLCD bundle is SS-Delineate's only real residual value yet is
+   regionally uneven (absent for UT), source soil/land cover from a
+   **CONUS-complete dataset** (national gridded SSURGO/gSSURGO + NLCD) rather than
+   per-state SS-Hydro payloads. This is the real remaining work item.
 3. Treat **travel time** as a separate build: NLDI flowtrace + upstream
-   navigation + Jobson regression, not a StreamStats endpoint.
-4. Validate CN/SSURGO exposure across the **full set of target states** before
-   committing — the UT/NC split shows coverage cannot be assumed CONUS-wide.
+   navigation + Jobson regression, not a StreamStats endpoint (executable ToT is
+   gated).
+4. **Net:** StreamStats is not required for the Effective-QPF architecture.
+   Keep SS-Hydro only as an opportunistic *characteristics* source where a state
+   exposes SSURGO and a national join isn't yet wired; do not couple delineation
+   to it.

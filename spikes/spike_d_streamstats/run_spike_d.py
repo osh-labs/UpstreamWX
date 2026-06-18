@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -159,9 +160,62 @@ def flowtrace(lat: float, lon: float, direction: str = "down") -> dict:
         return json.loads(resp.read())
 
 
+def split_catchment(lat: float, lon: float, *, upstream: bool = True) -> dict:
+    """NLDI split-catchment: stateless pour-point delineation (NHDPlus).
+
+    The stateless alternative to SS-Delineate. With ``upstream=True`` the
+    ``drainageBasin`` feature is the full upstream contributing area. A missing
+    ``drainageBasin`` means the point did not snap (same fragility as
+    SS-Delineate, but signalled by omission rather than a warning).
+    """
+    body = {
+        "inputs": [
+            {"id": "lat", "value": str(lat), "type": "text/plain"},
+            {"id": "lon", "value": str(lon), "type": "text/plain"},
+            {"id": "upstream", "value": str(upstream), "type": "text/plain"},
+        ]
+    }
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(f"{NLDI}/nldi-splitcatchment/execution", data=data, method="POST")
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        return json.loads(resp.read())
+
+
 # --------------------------------------------------------------------------- #
 # Derived quantities.
 # --------------------------------------------------------------------------- #
+def _ring_area_km2(ring: list) -> float:
+    """Shoelace area (km²) of a lon/lat ring, with a cos(lat) longitude scale."""
+    lat0 = sum(p[1] for p in ring) / len(ring)
+    k = math.cos(math.radians(lat0))
+    xs = [p[0] * 111.320 * k for p in ring]
+    ys = [p[1] * 110.574 for p in ring]
+    a = sum(xs[i] * ys[i + 1] - xs[i + 1] * ys[i] for i in range(len(ring) - 1))
+    return abs(a) / 2
+
+
+def _geom_area_km2(geom: dict) -> float | None:
+    t = geom.get("type")
+    if t == "Polygon":
+        return _ring_area_km2(geom["coordinates"][0])
+    if t == "MultiPolygon":
+        return sum(_ring_area_km2(poly[0]) for poly in geom["coordinates"])
+    return None
+
+
+def nldi_basin_area_sqkm(lat: float, lon: float) -> float | None:
+    """Upstream drainage-basin area (km²) from NLDI split-catchment, or None if unsnapped."""
+    try:
+        fc = split_catchment(lat, lon, upstream=True)
+        feat = next((f for f in fc.get("features", []) if f.get("id") == "drainageBasin"), None)
+        if feat is None:
+            return None  # no drainageBasin == point did not snap
+        return round(_geom_area_km2(feat["geometry"]), 1)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def chars_to_dict(chars: list[dict]) -> dict[str, float]:
     return {c["code"]: c["value"] for c in chars if isinstance(c.get("value"), (int, float))}
 
@@ -245,6 +299,7 @@ class PointResult:
     nudged: bool
     workspace_id: str
     area_sqkm: float | None
+    nldi_area_sqkm: float | None
     chars: dict[str, float]
     composite_cn: float | None
     cn_method: str
@@ -285,13 +340,22 @@ def probe_point(p: dict, regime: str) -> PointResult:
         print(f"  flowtrace failed: {exc}")
     print(f"  CN={cn} ({cn_method}); impervious={imp}%; flowline={fname} comid={comid}")
 
+    # Stateless delineation cross-check: NLDI split-catchment on the same point.
+    nldi_area = nldi_basin_area_sqkm(s_lat, s_lon)
+    delta = (
+        f"{abs(nldi_area - area_sqkm) / area_sqkm * 100:.1f}%"
+        if (nldi_area and area_sqkm)
+        else "n/a"
+    )
+    print(f"  NLDI split-catchment basin: {nldi_area} km^2 (vs SS {area_sqkm}; Δ {delta})")
+
     vintages = sorted({_nlcd_year(code) for code in c if _nlcd_year(code)})
     return PointResult(
         name=p["name"], region=p["region"], raw_lat=p["lat"], raw_lon=p["lon"],
         snapped_lat=s_lat, snapped_lon=s_lon, nudged=nudged, workspace_id=ws,
-        area_sqkm=area_sqkm, chars=c, composite_cn=cn, cn_method=cn_method,
-        impervious_frac=imp, carbonate_rock_frac=carb, travel_time=tt,
-        flowline_comid=comid, flowline_name=fname, nlcd_vintages=vintages,
+        area_sqkm=area_sqkm, nldi_area_sqkm=nldi_area, chars=c, composite_cn=cn,
+        cn_method=cn_method, impervious_frac=imp, carbonate_rock_frac=carb,
+        travel_time=tt, flowline_comid=comid, flowline_name=fname, nlcd_vintages=vintages,
     )
 
 
@@ -315,6 +379,7 @@ def cache_record(r: PointResult, *, ttl_days: int = 365) -> dict:
         "snap_nudged": r.nudged,
         "region": r.region,
         "basin_area_sqkm": r.area_sqkm,
+        "nldi_splitcatchment_area_sqkm": r.nldi_area_sqkm,
         "basin_characteristics": r.chars,
         "composite_cn": r.composite_cn,
         "composite_cn_method": r.cn_method,
