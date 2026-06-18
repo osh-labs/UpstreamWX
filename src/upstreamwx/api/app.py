@@ -20,8 +20,10 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 
 from ..config import get_settings
 from .cycles import cycle_key, next_cycle
@@ -85,6 +87,25 @@ def briefing(spec: MissionSpec) -> BriefingResponse:
     erroring.
     """
     return service.get_briefing(spec)
+
+
+def _frontend_dir() -> Path | None:
+    """Resolve the PWA directory to serve, or None to disable static serving (M0.4)."""
+    configured = get_settings().frontend_dir
+    if configured is not None:
+        # An explicit empty value disables serving (decoupled deployment).
+        return configured if str(configured) else None
+    # Default: the repo's frontend/ relative to this package (src/upstreamwx/api/app.py).
+    default = Path(__file__).resolve().parents[3] / "frontend"
+    return default if default.is_dir() else None
+
+
+# Serve the PWA single-origin (M0.4): the API routes above are registered first, so this
+# catch-all mount only handles non-API paths. ``html=True`` serves index.html at "/".
+_pwa = _frontend_dir()
+if _pwa is not None:
+    app.mount("/", StaticFiles(directory=_pwa, html=True), name="pwa")
+    logger.info("serving PWA from %s", _pwa)
 
 
 def main() -> None:

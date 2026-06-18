@@ -25,6 +25,35 @@ const fmtClock = (s) => String(s).replace(/\b(\d{2})(\d{2})\b/g, "$1:$2");
 
 let state = { briefing: null, fromCache: false, tab: "overview", mapInitialized: false };
 
+/* ── Mission spec (the POST /v1/briefing request) ──────────────────────
+ * The PWA holds a mission spec, persists it locally, and re-fetches a live
+ * briefing whenever the point or mission details change (M0.4). The spec
+ * mirrors the API's MissionSpec. */
+const API_BRIEFING = "/v1/briefing";
+const MISSION_KEY = "uwx.mission.v1";
+// Seed mission used on first run when nothing is saved (a real CONUS point).
+const DEFAULT_SPEC = {
+  lat: 34.665, lon: -85.361667, activity: "cave",
+  start: "2026-06-18T13:00", end: "2026-06-18T22:00",
+  name: "Pettyjohn's Cave", slot: false, frame: false,
+};
+
+function savedSpec() {
+  try { return JSON.parse(localStorage.getItem(MISSION_KEY)); } catch (e) { return null; }
+}
+function persistSpec(spec) {
+  try { localStorage.setItem(MISSION_KEY, JSON.stringify(spec)); } catch (e) { /* private mode */ }
+}
+// Build a request spec from a rendered briefing's mission block.
+function specFromBriefing(b) {
+  const m = b.mission;
+  return {
+    lat: m.lat, lon: m.lon, activity: m.activity,
+    start: m.window_start, end: m.window_end,
+    name: m.name, slot: m.is_slot, frame: false,
+  };
+}
+
 /* ── Acronym glossary (Resources card + tap-to-define) ─────────────────
  * Definitions for the acronyms that show up in the BLUF/SITREP and hazard
  * cards. Surfaced two ways: a glossary card in Resources and inline
@@ -151,8 +180,25 @@ function initGlossaryInteractions() {
 }
 
 /* ── Data load ─────────────────────────────────────────────────────── */
-async function loadBriefing() {
-  // M0.4: replace with `fetch('/v1/briefing', {method:'POST', body: missionSpec})`.
+// Live path (M0.4): POST the mission spec to the API. On failure (offline, or a
+// static-only deployment with no backend) fall back to the bundled sample so the PWA
+// still renders. The render layer is identical either way — both shapes are the same
+// structured contract.
+async function loadBriefing(spec) {
+  if (spec) {
+    try {
+      const res = await fetch(API_BRIEFING, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(spec),
+      });
+      if (!res.ok) throw new Error(res.status);
+      state.fromCache = res.headers.get("x-from-sw-cache") === "1" || !navigator.onLine;
+      return await res.json();
+    } catch (e) {
+      // fall through to the offline sample below
+    }
+  }
   try {
     const res = await fetch("data/sample-briefing.json", { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
@@ -166,6 +212,21 @@ async function loadBriefing() {
     }
     throw e;
   }
+}
+
+// Re-fetch and re-render for an updated mission spec (point move / mission edit).
+async function refresh(spec) {
+  persistSpec(spec);
+  const status = document.getElementById("status");
+  if (status) status.innerHTML = `<span class="status-line__currency">Updating briefing…</span>`;
+  let b;
+  try {
+    b = await loadBriefing(spec);
+  } catch (e) {
+    if (status) status.innerHTML = `<span class="status-line__currency">Could not update briefing.</span>`;
+    return;
+  }
+  renderAll(b);
 }
 
 /* ── Small render helpers ──────────────────────────────────────────── */
@@ -296,11 +357,11 @@ function renderOverview(b) {
 
   document.getElementById("view-overview").innerHTML = `
     ${missionCard(b)}
-    <section class="card">
+    ${b.summary ? `<section class="card">
       <p class="summary">${esc(b.summary)}
         ${b.framed ? '<span class="framed-by">Summary wording only — all posture and severity values are deterministic engine output, not model-derived.</span>' : ""}
       </p>
-    </section>
+    </section>` : ""}
     <section class="card"><h2 class="section-title" style="margin-bottom:var(--space-2)">Hazards</h2>
       <div class="hazard-list">${hazards}</div>
     </section>
@@ -314,6 +375,8 @@ function renderOverview(b) {
   document.querySelectorAll('[data-goto="hazards"]').forEach((el) =>
     el.addEventListener("click", () => selectTab("hazards"))
   );
+  const edit = document.querySelector(".mission-card__edit");
+  if (edit) edit.addEventListener("click", () => openMissionEditor(b));
   linkifyAcronyms(document.getElementById("view-overview"));
 }
 
@@ -595,6 +658,10 @@ function renderHazards(b) {
 
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
 function renderMap(b) {
+  // A re-render recreates the map container; drop any prior Leaflet instance so it
+  // rebuilds against the new briefing (point / watershed may have changed).
+  if (_leafletMap) { _leafletMap.remove(); _leafletMap = null; }
+  state.mapInitialized = false;
   document.getElementById("view-map").innerHTML = `
     <div id="leaflet-map" aria-label="Mission area topographic map"></div>
     <div class="disclaimer">Planning map. The shaded basin is the approximate upstream watershed feeding the mission point. Tap either for details.</div>`;
@@ -670,7 +737,8 @@ function initLeafletMap(b) {
     });
   });
 
-  // In move mode, the next map tap relocates the point (display-only on the mock data).
+  // In move mode, the next map tap relocates the point and re-fetches a live briefing
+  // for the new location — the upstream watershed re-traces (FR-1, FR-38).
   _leafletMap.on("click", (e) => {
     if (!_moveMode) return;
     _moveMode = false;
@@ -678,8 +746,7 @@ function initLeafletMap(b) {
     m.lat = e.latlng.lat;
     m.lon = e.latlng.lng;
     _poiMarker.setLatLng(e.latlng);
-    _poiMarker.setPopupContent(poiPopupHtml(m));
-    renderOverview(b); // keep the mission card's coordinates in sync
+    refresh(specFromBriefing(b));
   });
 
   state.mapInitialized = true;
@@ -895,19 +962,66 @@ function maybeShowAck() {
   });
 }
 
+/* ── Mission editor (FR-33) ────────────────────────────────────────── */
+// Minimal in-place editor: activity (cave/canyon), window, party size, slot flag.
+// Submitting builds a MissionSpec and re-fetches a live briefing.
+function openMissionEditor(b) {
+  hideGlossaryPopover();
+  const m = b.mission;
+  const local = (iso) => String(iso).slice(0, 16); // ISO -> "YYYY-MM-DDTHH:MM" for the input
+  const host = document.getElementById("mission-editor") || (() => {
+    const el = document.createElement("div");
+    el.id = "mission-editor";
+    el.className = "ack-modal";
+    el.setAttribute("role", "dialog");
+    el.setAttribute("aria-modal", "true");
+    document.body.appendChild(el);
+    return el;
+  })();
+  host.hidden = false;
+  host.innerHTML = `
+    <div class="ack-card">
+      <h2>Edit mission</h2>
+      <form id="mission-form" class="mission-form">
+        <label>Name<input name="name" value="${esc(m.name)}" required /></label>
+        <label>Activity
+          <select name="activity">
+            <option value="canyon" ${m.activity === "canyon" ? "selected" : ""}>Canyon</option>
+            <option value="cave" ${m.activity === "cave" ? "selected" : ""}>Cave</option>
+          </select>
+        </label>
+        <label>Start<input name="start" type="datetime-local" value="${esc(local(m.window_start))}" required /></label>
+        <label>End<input name="end" type="datetime-local" value="${esc(local(m.window_end))}" required /></label>
+        <label>Party size<input name="party_size" type="number" min="1" value="${m.party_size || ""}" /></label>
+        <label class="mission-form__check"><input name="slot" type="checkbox" ${m.is_slot ? "checked" : ""} /> Slot canyon</label>
+        <div class="mission-form__actions">
+          <button type="button" id="mission-cancel" class="btn-ghost">Cancel</button>
+          <button type="submit" class="btn-primary mission-form__submit">Update briefing</button>
+        </div>
+      </form>
+    </div>`;
+  const close = () => { host.hidden = true; };
+  document.getElementById("mission-cancel").addEventListener("click", close);
+  document.getElementById("mission-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = new FormData(e.target);
+    const spec = {
+      lat: m.lat, lon: m.lon,
+      activity: f.get("activity"),
+      name: f.get("name"),
+      start: f.get("start"),
+      end: f.get("end"),
+      slot: f.get("slot") === "on",
+      party_size: f.get("party_size") ? Number(f.get("party_size")) : null,
+      frame: false,
+    };
+    close();
+    refresh(spec);
+  });
+}
+
 /* ── Bootstrap ─────────────────────────────────────────────────────── */
-async function main() {
-  renderTabs();
-  initGlossaryInteractions();
-  maybeShowAck();
-  let b;
-  try {
-    b = await loadBriefing();
-  } catch (e) {
-    document.getElementById("view-overview").innerHTML =
-      `<section class="card"><p class="summary">Could not load a briefing and no cached copy is available offline.</p></section>`;
-    return;
-  }
+function renderAll(b) {
   state.briefing = b;
   renderHeader(b);
   renderOverview(b);
@@ -918,9 +1032,24 @@ async function main() {
   renderAbout(b);
   renderStatus(b);
   selectTab(state.tab);
+}
 
-  window.addEventListener("online", () => renderStatus(b));
-  window.addEventListener("offline", () => { state.fromCache = true; renderStatus(b); });
+async function main() {
+  renderTabs();
+  initGlossaryInteractions();
+  maybeShowAck();
+  let b;
+  try {
+    b = await loadBriefing(savedSpec() || DEFAULT_SPEC);
+  } catch (e) {
+    document.getElementById("view-overview").innerHTML =
+      `<section class="card"><p class="summary">Could not load a briefing and no cached copy is available offline.</p></section>`;
+    return;
+  }
+  renderAll(b);
+
+  window.addEventListener("online", () => renderStatus(state.briefing));
+  window.addEventListener("offline", () => { state.fromCache = true; renderStatus(state.briefing); });
 }
 
 if ("serviceWorker" in navigator) {

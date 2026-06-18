@@ -150,3 +150,33 @@ def test_cave_isolation_posture(client):
     )
     assert resp.status_code == 200
     assert "isolated from surface weather" in resp.json()["markdown"]
+
+
+_SAMPLE = Path(__file__).resolve().parents[1] / "frontend" / "data" / "sample-briefing.json"
+
+
+def test_briefing_carries_structured_contract(client):
+    """The response carries the PWA's structured shape alongside the Markdown (M0.4)."""
+    import json
+
+    sample_keys = set(json.loads(_SAMPLE.read_text())) - {"_comment"}
+    body = client.post("/v1/briefing", json=_spec().model_dump(mode="json")).json()
+    # Every contract field is present (markdown is the extra CLI artifact).
+    assert sample_keys <= set(body)
+    assert body["markdown"].startswith("# UPSTREAMWX")
+    assert body["mission"]["name"] == "Buckskin Gulch"
+    assert body["mission"]["activity"] == "canyon"
+    assert len(body["bluf"]) == 4
+    assert len(body["timeline"]) == 4
+    assert len(body["resources"]) == 4
+    # Offline inputs path -> no live bundle -> graceful display nulls (NFR-6).
+    assert body["watershed"] is None
+    assert body["forecast_hourly"] == {"hours": [], "rows": []}
+
+
+def test_pwa_served_at_root(client):
+    """Single-origin StaticFiles mount serves the PWA index at '/' (M0.4)."""
+    resp = client.get("/")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "UpstreamWX" in resp.text

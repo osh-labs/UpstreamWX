@@ -26,6 +26,11 @@ class Settings(BaseSettings):
     # Root for runtime caches (raw GRIB2 pulls, WBD downloads). Git-ignored.
     data_dir: Path = Path("./data")
 
+    # Static PWA directory served single-origin by the API (M0.4). None -> the repo's
+    # ``frontend/`` (resolved relative to the package); set UPSTREAMWX_FRONTEND_DIR to
+    # override for a packaged deployment, or to "" to disable static serving entirely.
+    frontend_dir: Path | None = None
+
     # Optional override for the SREF source base URL once Spike A pins it.
     sref_base_url: str | None = None
 

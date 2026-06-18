@@ -9,17 +9,22 @@ window max apparent temperature; cold/wet takes the egress-relevant minimum.
 from __future__ import annotations
 
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import requests
 
 from ..engine.models import Mission
-from .base import IngestBundle
+from .base import ForecastHourly, IngestBundle
 
 API = "https://api.open-meteo.com/v1/forecast"
 NAME = "open_meteo"
 
-_HOURLY = "temperature_2m,apparent_temperature,precipitation,cape,wind_speed_10m"
+# Engine-feeding fields plus the extra display series the Forecast view renders (FR-6).
+# Display additions (gusts / precip probability / weather code) do not feed the engine.
+_HOURLY = (
+    "temperature_2m,apparent_temperature,precipitation,precipitation_probability,"
+    "cape,wind_speed_10m,wind_gusts_10m,weather_code"
+)
 # A measurable-precip / antecedent-wetness floor (inches over a window).
 _MEASURABLE_IN = 0.01
 _ANTECEDENT_IN = 0.25
@@ -83,6 +88,62 @@ def _in_window(times: list[str], start: datetime, end: datetime) -> list[int]:
     return idx
 
 
+# WMO weather-code -> sky emoji for the Forecast-view table (display only). Ranges map
+# the standard WMO 4677 code groups (clear / cloud / fog / drizzle-rain / snow / thunder).
+def _sky_emoji(code: float | None) -> str:
+    if code is None:
+        return "—"
+    c = int(code)
+    if c == 0:
+        return "☀️"
+    if c in (1, 2):
+        return "⛅"
+    if c == 3:
+        return "☁️"
+    if c in (45, 48):
+        return "🌫️"
+    if c in (51, 53, 55, 56, 57, 80):
+        return "🌦️"
+    if c in (61, 63, 65, 66, 67, 81, 82):
+        return "🌧️"
+    if c in (71, 73, 75, 77, 85, 86):
+        return "🌨️"
+    if c in (95, 96, 99):
+        return "⛈️"
+    return "⛅"
+
+
+def _build_forecast_hourly(mission: Mission, hourly: dict, window: list[int]) -> ForecastHourly:
+    """Assemble the per-hour display series for the window, localized to the mission tz."""
+    offset = mission.window_start.utcoffset() or timedelta(0)
+
+    def col(name: str) -> list:
+        return hourly.get(name, [])
+
+    times, temp = col("time"), col("temperature_2m")
+    feels, wind = col("apparent_temperature"), col("wind_speed_10m")
+    gust, ppct = col("wind_gusts_10m"), col("precipitation_probability")
+    qpf, wcode = col("precipitation"), col("weather_code")
+
+    def at(arr: list, i: int):
+        return arr[i] if i < len(arr) else None
+
+    hours: list[str] = []
+    for i in window:
+        local = datetime.fromisoformat(times[i]) + offset  # times are naive UTC
+        hours.append(local.strftime("%H%M"))
+    return ForecastHourly(
+        hours=hours,
+        temp_f=[at(temp, i) for i in window],
+        feels_f=[at(feels, i) for i in window],
+        wind_mph=[at(wind, i) for i in window],
+        gust_mph=[at(gust, i) for i in window],
+        precip_pct=[at(ppct, i) for i in window],
+        qpf_in=[at(qpf, i) for i in window],
+        sky=[_sky_emoji(at(wcode, i)) for i in window],
+    )
+
+
 def fetch(mission: Mission, bundle: IngestBundle) -> None:
     """Populate derived thermal / precip fields on the bundle for the window."""
     data = _query(mission.lat, mission.lon)
@@ -100,6 +161,8 @@ def fetch(mission: Mission, bundle: IngestBundle) -> None:
             bundle.apparent_temp_f = min(app_vals)
         win_precip = sum(precip[i] for i in window if precip[i] is not None)
         bundle.measurable_precip = win_precip >= _MEASURABLE_IN
+        # Display series for the PWA Forecast view (does not feed the engine).
+        bundle.forecast_hourly = _build_forecast_hourly(mission, hourly, window)
 
     # Antecedent wetness: significant precip in the hours before the window.
     start_cmp = _to_utc_naive(mission.window_start)

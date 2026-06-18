@@ -18,6 +18,27 @@ if TYPE_CHECKING:
 
 
 @dataclass
+class ForecastHourly:
+    """Per-hour display forecast over the mission window (FR-6; M0.4 PWA Forecast view).
+
+    Built by the Open-Meteo adapter from the *same* query that feeds the engine's derived
+    fields, then carried on the bundle so the API can serialize the Forecast view's table
+    and charts (PRD §6.8). The engine never reads this — it is display data only and never
+    changes a posture (FR-20). Empty/absent under graceful degradation (NFR-6) or on the
+    offline ``inputs`` path. All arrays are index-aligned with ``hours``.
+    """
+
+    hours: list[str]                       # local "HHMM" labels, mission-window order
+    temp_f: list[float | None]             # air temperature, deg F
+    feels_f: list[float | None]            # apparent temperature, deg F
+    wind_mph: list[float | None]
+    gust_mph: list[float | None]
+    precip_pct: list[float | None]         # precipitation probability, percent
+    qpf_in: list[float | None]             # quantitative precip forecast, inch
+    sky: list[str]                         # WMO weather-code emoji per hour
+
+
+@dataclass
 class IngestBundle:
     """Normalized fields gathered from all sources for one mission/window."""
 
@@ -38,6 +59,10 @@ class IngestBundle:
     wind_mph: float | None = None
     measurable_precip: bool = False
     antecedent_precip_24_72h: bool = False
+
+    # Per-hour display forecast over the window (FR-6; M0.4 Forecast view). Display only,
+    # not an engine input; None when ingest could not populate it (NFR-6).
+    forecast_hourly: ForecastHourly | None = None
 
     # SREF ensemble over the upstream domain (FR-7).
     sref_p_precip: float | None = None
