@@ -434,8 +434,7 @@ function renderHazards(b) {
 
   document.getElementById("view-hazards").innerHTML = `
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Hazards by phase</h2>
-      <p style="font-size:var(--text-caption);color:var(--color-text-muted);margin:0 0 var(--space-3)">Organized by mission phase. A hazard appears only where it applies — no lightning across a sheltered technical span.</p>
+      <h2 class="section-title" style="margin-bottom:var(--space-3)">Hazards by phase</h2>
       <div class="timeline">
         <div class="timeline__phases">${phaseHead}</div>
         ${rows}
