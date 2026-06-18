@@ -44,9 +44,14 @@ function postureChip(label, sevClass, big = false) {
   return `<span class="posture-chip ${sevClass} ${big ? "is-lg" : ""}">${esc(label)}</span>`;
 }
 
-function confidenceTag(level) {
+function confidenceTag(level, big = false) {
+  // Solid-orange bar whose thickness encodes the level (thin=low … fat=high) —
+  // style, not hue (FR-36), with the text label below. Display-only (FR-17).
   const k = String(level).toLowerCase();
-  return `<span class="confidence-tag is-${k}"><span class="confidence-tag__swatch"></span>${esc(level)} confidence</span>`;
+  return `<div class="confidence is-${k} ${big ? "is-lg" : ""}" title="${esc(level)} confidence">
+    <div class="confidence__track"><span class="confidence__bar"></span></div>
+    <div class="confidence__label">${esc(level)} confidence</div>
+  </div>`;
 }
 
 /* ── 7.1/7.3 Header + mission card ─────────────────────────────────── */
@@ -75,12 +80,13 @@ function missionCard(b) {
           <button class="mission-card__edit" aria-label="Edit mission">${icon("edit", "")}</button>
         </h1>
         <div class="mission-card__meta">${fmtD} · ${fmtT(start)}–${fmtT(end)} ${esc(m.timezone)}</div>
-        <div class="mission-card__meta"><span class="mono">${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</span>${b.watershed ? ` · Watershed area <span class="mono">${b.watershed.area_sq_mi.toFixed(1)} mi²</span>` : ""}</div>
+        <div class="mission-card__meta"><span class="mono">${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</span></div>
+        ${b.watershed ? `<div class="mission-card__meta">Watershed area <span class="mono">${b.watershed.area_sq_mi.toFixed(1)} mi²</span></div>` : ""}
       </div>
       <div class="mission-card__posture">
         <div class="eyebrow">Overall posture</div>
         ${postureChip(b.overall_posture, overallSevClass(b), true)}
-        ${confidenceTag(b.overall_confidence)}
+        ${confidenceTag(b.overall_confidence, true)}
       </div>
     </section>`;
 }
@@ -194,8 +200,8 @@ function renderForecast(b) {
     </section>
     <section class="card">
       <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (°F)</h2>
-      ${lineChart([b.temp_series.air, b.temp_series.feels], f.hours, ["var(--sev-elevated)", "var(--color-brand)"])}
-      <div class="chart-caption">Air (amber) · Feels-like (cyan)</div>
+      ${lineChart([b.temp_series.air, b.temp_series.feels], f.hours, ["var(--sev-high)", "var(--sev-extreme)"])}
+      <div class="chart-caption">Air (orange) · Feels-like (red)</div>
     </section>
     <section class="card">
       <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (mph)</h2>
@@ -435,8 +441,8 @@ function renderHazards(b) {
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
 function renderMap(b) {
   document.getElementById("view-map").innerHTML = `
-    <div id="leaflet-map" aria-label="Mission area satellite map"></div>
-    <div class="disclaimer">Planning map — satellite imagery via Esri. The shaded basin is the upstream watershed feeding the mission point; tap either for details. No radar layer in v1.</div>`;
+    <div id="leaflet-map" aria-label="Mission area topographic map"></div>
+    <div class="disclaimer">Planning map — dark topographic basemap via Esri. The shaded basin is the upstream watershed feeding the mission point; tap either for details. No radar layer in v1.</div>`;
 }
 
 let _leafletMap = null;
@@ -457,18 +463,22 @@ function initLeafletMap(b) {
   if (_leafletMap) { _leafletMap.invalidateSize(); return; }
 
   const m = b.mission;
-  _leafletMap = L.map(container, { zoomControl: true, attributionControl: true })
+  _leafletMap = L.map(container, { zoomControl: true, attributionControl: true, maxZoom: 16 })
     .setView([m.lat, m.lon], 13);
 
+  // Dark topographic basemap: Esri dark-gray canvas + dark hillshade for terrain relief.
   L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
-    { attribution: "Tiles &copy; Esri &mdash; Esri, i-cubed, USDA, USGS, AEX, GeoEye", maxZoom: 18 }
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}",
+    { attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin, USGS, NGA", maxZoom: 16 }
   ).addTo(_leafletMap);
-
-  // Place-name / boundary labels on top of satellite
   L.tileLayer(
-    "https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}",
-    { maxZoom: 18, opacity: 0.9 }
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Elevation/World_Hillshade_Dark/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 16, opacity: 0.45 }
+  ).addTo(_leafletMap);
+  // Place-name / boundary labels (kept under the vector overlays).
+  L.tileLayer(
+    "https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}",
+    { maxZoom: 16, opacity: 0.9 }
   ).addTo(_leafletMap);
 
   // Upstream watershed: 20%-opacity blue fill, full-opacity thin border; tap for HUC + area.

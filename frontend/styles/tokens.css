@@ -102,4 +102,6 @@
 
   /* ── 6. Layout ───────────────────────────────────────────────────── */
   --app-max-width: 480px;
+  --pill-w: 150px;     /* equal-width hazard posture pills + confidence bar */
+  --pill-w-lg: 160px;  /* overall-posture pill (is-lg) + its confidence bar */
 }
