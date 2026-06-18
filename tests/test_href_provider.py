@@ -36,6 +36,18 @@ def test_forecast_hour_in_same_day_window() -> None:
     assert fhour == 18  # midpoint 18Z is f18 off the 00Z cycle
 
 
+def test_naive_window_datetimes_are_treated_as_utc() -> None:
+    # Mission windows from the engine/CLI are timezone-naive; mixing them with the
+    # UTC-aware cycle/now clock used to raise TypeError. They must be coerced to UTC.
+    now = datetime(2026, 6, 18, 6, tzinfo=UTC)
+    cycle_init = datetime(2026, 6, 18, 0, tzinfo=UTC)
+    start = datetime(2026, 6, 18, 17)  # naive
+    end = datetime(2026, 6, 18, 19)    # naive
+    fhour, in_range = forecast_hour_for_window(cycle_init, start, end, now=now)
+    assert in_range
+    assert fhour == 18
+
+
 def test_window_beyond_supplement_band_is_out_of_range() -> None:
     now = datetime(2026, 6, 18, 6, tzinfo=UTC)
     cycle_init = datetime(2026, 6, 18, 0, tzinfo=UTC)
