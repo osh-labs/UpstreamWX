@@ -23,6 +23,20 @@ _CONVECTIVE_RE = re.compile(
     r"\b(thunderstorm|convection|convective|lightning|isolated|scattered)\b", re.I
 )
 
+# Flood/heavy-rain language the AFD scan treats as a flood signal. The forecaster
+# discussion routinely flags excessive-rainfall potential ahead of (or alongside)
+# any issued product, so a hit raises the flood posture (§16.1). Intentionally a
+# coarse positive flag — same philosophy as the convective scan above.
+_FLOOD_RE = re.compile(
+    r"\b("
+    r"excessive rainfall|flash flood(?:ing)?|"
+    r"heavy rain(?:fall)?|torrential|training (?:cells|storms|echoes|convection)|"
+    r"rainfall rates?|flood(?:ing)? (?:threat|concern|potential|possible|likely|risk)|"
+    r"flash flood guidance|ffg"
+    r")\b",
+    re.I,
+)
+
 
 def _headers() -> dict[str, str]:
     return {"User-Agent": get_settings().nws_user_agent, "Accept": "application/geo+json"}
@@ -71,7 +85,21 @@ def fetch(mission: Mission, bundle: IngestBundle) -> None:
     bundle.flash_flood_watch = any("flash flood watch" in e for e in lowered)
     bundle.thunderstorm_warning = any("thunderstorm warning" in e for e in lowered)
 
+    # Areal/river flood products. Match the generic "Flood ..." events but exclude
+    # the flash-flood family (handled above) and coastal flooding (not an upstream
+    # drainage hazard) so neither double-counts nor falsely fires.
+    def _flood_event(kind: str) -> bool:
+        return any(
+            f"flood {kind}" in e and "flash" not in e and "coastal" not in e
+            for e in lowered
+        )
+
+    bundle.flood_warning = _flood_event("warning")
+    bundle.flood_advisory = _flood_event("advisory")
+    bundle.flood_watch = _flood_event("watch")
+
     afd = latest_afd(mission.lat, mission.lon)
     bundle.afd_text = afd
     bundle.afd_convective_mention = bool(afd and _CONVECTIVE_RE.search(afd))
+    bundle.afd_flood_mention = bool(afd and _FLOOD_RE.search(afd))
     bundle.sources_ok[NAME] = True

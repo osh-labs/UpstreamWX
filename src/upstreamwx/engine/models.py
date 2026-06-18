@@ -102,9 +102,14 @@ class HazardInputs:
     is written in. All probabilities are percent ``[0, 100]``; temperatures deg F.
     """
 
-    # Active NWS products (FR-5).
+    # Active NWS products (FR-5). Flash flood products anchor the acute near term;
+    # the areal/river flood products (warning/advisory/watch) cover the slower-onset
+    # flooding the flash-flood scan alone misses.
     flash_flood_warning: bool = False
     flash_flood_watch: bool = False
+    flood_warning: bool = False
+    flood_advisory: bool = False
+    flood_watch: bool = False
     thunderstorm_warning: bool = False
 
     # SREF ensemble aggregates over the upstream domain.
@@ -125,9 +130,10 @@ class HazardInputs:
     member_support: dict[str, float] = field(default_factory=dict)
     source_agreement: str = "consistent"          # consistent | partial | conflict
 
-    # SPC convective outlook category over the window, and AFD signal.
+    # SPC convective outlook category over the window, and AFD signals.
     spc_category: str | None = None               # categorical|enhanced|slight|marginal
-    afd_convective_mention: bool = False
+    afd_convective_mention: bool = False          # AFD discusses convection (lightning)
+    afd_flood_mention: bool = False               # AFD discusses excessive rain/flooding
 
     # Open-Meteo derived fields (deg F / mph).
     heat_index_f: float | None = None

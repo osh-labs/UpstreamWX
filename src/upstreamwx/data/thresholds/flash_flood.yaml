@@ -3,7 +3,7 @@
 # references them by key; no threshold is hard-coded in engine logic. Tune through
 # field testing by editing this file — never a code change.
 hazard: flash_flood
-version: "1.1.0"
+version: "1.2.0"
 provenance:
   effective_date: "2026-06-18"
   rationale: >-
@@ -13,13 +13,29 @@ provenance:
     fallback are UpstreamWX proposals; warning/watch overrides are standard NWS
     practice. v1.1 adds the HREF same-day high-resolution overlay (FR-7a, §16.1):
     HREF neighborhood P(QPF) on its own cut points, engine takes the higher tier.
+    v1.2 broadens product coverage beyond the flash-flood family to the areal/river
+    Flood Warning/Advisory/Watch, and adds an AFD excessive-rainfall signal so a
+    forecaster discussion of flooding raises the posture even before a probability
+    threshold trips. Products and AFD now raise (never lower) the SREF/HREF tier.
     To be tuned via field testing (FR-20a).
   source: "UpstreamWX PRD v0.8 §16.1"
 
-# Active NWS products override SREF probability (they already encode QPF-vs-FFG).
+# Active NWS products anchor the near term (they already encode QPF-vs-FFG). Each
+# active product contributes a candidate tier; the engine takes the max across
+# products and the SREF/HREF signal (products raise, never lower). Flash-flood
+# products are the acute family; the areal/river Flood products cover slower-onset
+# flooding (Flood Warning = flooding occurring/imminent; Advisory = nuisance/minor;
+# Watch = conditions favorable). Areal tiers are UpstreamWX proposals.
 products:
   flash_flood_warning_tier: extreme   # active Flash Flood Warning -> Extreme
   flash_flood_watch_tier: high        # active Flash Flood Watch   -> High
+  flood_warning_tier: high            # active Flood Warning        -> High
+  flood_advisory_tier: elevated       # active Flood Advisory       -> Elevated
+  flood_watch_tier: elevated          # active Flood Watch          -> Elevated
+
+# AFD forecaster discussion of excessive rainfall / flooding raises the flood
+# posture to at least this tier (coarse positive signal, §16.1). UpstreamWX proposal.
+afd_flood_mention_tier: elevated
 
 # SREF P(precip/thunderstorm) over the upstream domain, percent [0, 100].
 # Highest matching band wins; below elevated_min -> minimal.
