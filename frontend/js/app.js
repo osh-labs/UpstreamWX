@@ -550,7 +550,7 @@ function renderHazards(b) {
         ${icon("chevron", "hazard-detail__chev")}
       </summary>
       <div class="hazard-detail__body">
-        <div style="margin-top:var(--space-3)">${confidenceTag(h.confidence)}</div>
+        <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
         <h4>Threshold logic</h4>
         <p style="font-size:var(--text-label);color:var(--color-text-secondary);margin:var(--space-1) 0 0">${esc(h.logic)}</p>
@@ -562,8 +562,7 @@ function renderHazards(b) {
 
   document.getElementById("view-hazards").innerHTML = `
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Hazards by phase</h2>
-      <p style="font-size:var(--text-caption);color:var(--color-text-muted);margin:0 0 var(--space-3)">Organized by mission phase. A hazard appears only where it applies — no lightning across a sheltered technical span.</p>
+      <h2 class="section-title" style="margin-bottom:var(--space-3)">Hazards by phase</h2>
       <div class="timeline">
         <div class="timeline__phases">${phaseHead}</div>
         ${rows}
