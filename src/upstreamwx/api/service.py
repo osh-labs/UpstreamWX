@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 
 from ..engine.models import Mission
 from ..sitrep.generate import GeneratedBriefing, generate_briefing
+from ..sitrep.structured import to_structured
 from .cache import STATIC_TOKEN, BriefingCache, mission_cache_key
 from .cycles import cycle_key
 from .models import BriefingResponse, MissionSpec
@@ -89,20 +90,10 @@ class BriefingService:
     def _response(
         self, briefing: GeneratedBriefing, token: str, *, cached: bool
     ) -> BriefingResponse:
-        result = briefing.result
-        return BriefingResponse(
-            markdown=briefing.markdown,
-            overall_posture=result.overall_tier.label,
-            overall_confidence=result.overall_confidence.label,
-            threshold_version=result.threshold_version,
-            generated_at=briefing.generated_at,
-            framed=briefing.framed,
-            cached=cached,
-            cache_cycle=token,
-            degraded=briefing.degraded,
-            sources_ok=briefing.sources_ok,
-            warnings=briefing.warnings,
-        )
+        # One serializer builds the whole structured contract (M0.4); the service only
+        # supplies the cache provenance and the Markdown artifact.
+        structured = to_structured(briefing, cached=cached, cache_cycle=token)
+        return BriefingResponse(markdown=briefing.markdown, **structured)
 
 
 def _as_utc(value: datetime) -> datetime:

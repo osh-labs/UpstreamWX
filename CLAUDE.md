@@ -68,11 +68,13 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
   sitrep/                M0.2 SITREP layer + `upstreamwx` CLI
     generate.py            generate_briefing(...) — the ONE generation core the CLI and API both call
     render.py              deterministic Markdown render (golden-file tested)
+    structured.py          BriefingResult+bundle -> the PWA's structured JSON contract (M0.4)
+    hazard_copy.py         static per-hazard threshold-logic copy for the Hazards view (FR-20)
     frame.py               optional Claude Haiku framing (no-posture-change)
     sources.py             verify-against-NWS source links
     cli.py                 `upstreamwx` console entry
   api/                   M0.3 FastAPI service (`upstreamwx-api`)
-    app.py                 POST /v1/briefing, GET /v1/health; lifespan starts refresh scheduler
+    app.py                 POST /v1/briefing, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler
     service.py             BriefingService (cache-aware generation + active-mission refresh)
     cache.py               BriefingCache (keyed by location/window/activity, valid one SREF cycle)
     cycles.py              pure SREF-cycle arithmetic (03/09/15/21Z)
@@ -83,8 +85,9 @@ tests/                   hermetic suite + committed fixtures + validation corpus
   corpus/*.yaml            the validation oracle: boundary cases per hazard + historical_replay
   fixtures/                committed sample data (GRIB2 subsets, GeoJSON, golden SITREP .md)
   gen_sitrep_goldens.py    regenerate golden files after an intentional render change
-frontend/                static PWA (M0.4+); STYLE_GUIDE.md is the visual source of truth
-docs/m0.0../m0.3/        per-milestone findings + spike reports — read these for "why"
+frontend/                static PWA (M0.4); fetches POST /v1/briefing; STYLE_GUIDE.md is the visual source of truth
+  data/sample-briefing.json  the frozen structured contract + SW offline fallback
+docs/m0.0../m0.4/        per-milestone findings + spike reports — read these for "why"
 .claude/hooks/           SessionStart hook that installs deps in the web environment
 ```
 
@@ -202,14 +205,25 @@ where both are in range the engine takes the **higher** tier (FR-19).
 
 Built and validated: **M0.0** (de-risk spikes A/B/C/D resolved YES), **M0.1**
 (engine + thresholds + corpus + watershed + ingest), **M0.2** (CLI → `.md` SITREP +
-Haiku framing), **M0.3** (FastAPI service, cache, cycle math, shared generation core).
+Haiku framing), **M0.3** (FastAPI service, cache, cycle math, shared generation core),
+**M0.4** (PWA wired to the live API — see below).
+
+**M0.4** (PWA: map point in → SITREP out). The API now emits the full structured briefing
+the PWA renders its five views from (`sitrep/structured.py`, the API analogue of
+`render.py`; the contract is `frontend/data/sample-briefing.json`) and serves the PWA
+single-origin (`app.py` `StaticFiles` mount, `UPSTREAMWX_FRONTEND_DIR` to override). The
+frontend POSTs `/v1/briefing`; dropping/moving the point or editing the mission re-fetches
+live, the upstream watershed re-traces and renders (FR-1, FR-33, FR-38). The Open-Meteo
+adapter now also persists a per-hour display series (`IngestBundle.forecast_hourly`,
+display-only — never an engine input). Verified live end-to-end in-container.
 
 Deferred to **M0.1.1** (requires the always-on EC2 host; cannot be validated in an
 ephemeral container): the recurring SREF scheduler **cadence** and the
 **cross-restart persistent cache**. The host-independent cores (on-demand SREF
 processing, cache semantics, cycle arithmetic, a single refresh pass) are built and
-tested. **M0.4/M0.5** (the PWA) are upcoming — `frontend/` holds the shell and the
-`STYLE_GUIDE.md` visual source of truth; the live backend wires in at M0.4.
+tested. **M0.5** (flesh out the PWA — offline cache timestamp UX FR-26/41, PDF export
+FR-27, remaining timeline polish) is upcoming; `STYLE_GUIDE.md` is the visual source of
+truth.
 
 For the "why" behind any milestone, read `docs/m0.X/README.md` and the spike reports
 in `docs/m0.0/`.

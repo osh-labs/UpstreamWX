@@ -63,7 +63,14 @@ class MissionSpec(BaseModel):
 
 
 class BriefingResponse(BaseModel):
-    """A generated (or cached) briefing and its provenance."""
+    """A generated (or cached) briefing and its provenance.
+
+    Carries both the Markdown SITREP (``markdown`` — the CLI's artifact) and the
+    structured view the PWA renders its five views from (M0.4). The structured fields are
+    built by :func:`upstreamwx.sitrep.structured.to_structured`; their shape is the frozen
+    contract in ``frontend/data/sample-briefing.json``. Every posture here is the engine's
+    verbatim output — the response layer decides nothing (FR-13, FR-20).
+    """
 
     markdown: str
     overall_posture: str
@@ -76,3 +83,17 @@ class BriefingResponse(BaseModel):
     degraded: bool = Field(description="True if a non-mandatory source was unavailable (NFR-6)")
     sources_ok: dict[str, bool] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
+
+    # Structured view for the PWA (M0.4). See sample-briefing.json for the shape.
+    mission: dict = Field(default_factory=dict)
+    watershed: dict | None = None
+    summary: str | None = None
+    bluf: list[dict] = Field(default_factory=list)
+    metrics: list[dict] = Field(default_factory=list)
+    phases: list[dict] = Field(default_factory=list)
+    timeline: list[dict] = Field(default_factory=list)
+    hazard_detail: list[dict] = Field(default_factory=list)
+    forecast_hourly: dict = Field(default_factory=dict)
+    temp_series: dict = Field(default_factory=dict)
+    wind_series: dict = Field(default_factory=dict)
+    resources: list[dict] = Field(default_factory=list)
