@@ -24,7 +24,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.ops import unary_union
 
-from cavetak_weather.sref import (
+from upstreamwx.sref import (
     aggregate_over_polygon,
     latest_available_cycle,
     load_probability_field,

@@ -2,7 +2,7 @@
 
 **Date:** 2026-06-18
 **PRD refs:** FR-2 (lat/lon → containing HUC-12), FR-3 (upstream contributing watershed)
-**Code:** `src/cavetak_weather/watershed/{huc,upstream}.py`, CLI `spikes/spike_b_huc/run_spike_b.py`
+**Code:** `src/upstreamwx/watershed/{huc,upstream}.py`, CLI `spikes/spike_b_huc/run_spike_b.py`
 
 ## Goal
 
@@ -81,7 +81,7 @@ dissolved Buckskin Gulch upstream domain (origin `140700070505`, 14 HUC-12s,
 
 - `.venv/bin/pytest -q` (offline): **3 passed, 1 deselected** (green).
 - `@pytest.mark.network` live test (resolve + trace Buckskin): **1 passed**.
-- `.venv/bin/ruff check src/cavetak_weather/watershed spikes/spike_b_huc tests`:
+- `.venv/bin/ruff check src/upstreamwx/watershed spikes/spike_b_huc tests`:
   **All checks passed.**
 
 ## Limitations / caveats

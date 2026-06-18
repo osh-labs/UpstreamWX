@@ -8,8 +8,8 @@ import geopandas as gpd
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-from cavetak_weather.sref.aggregate import aggregate_over_polygon
-from cavetak_weather.sref.extract import open_subset
+from upstreamwx.sref.aggregate import aggregate_over_polygon
+from upstreamwx.sref.extract import open_subset
 
 
 def _sample_field(fixtures_dir: Path):

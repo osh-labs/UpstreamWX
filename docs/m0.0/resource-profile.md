@@ -51,7 +51,7 @@ domain count, provided domains are aggregated from the shared cached grid.)
 
 ## Headroom verdict
 
-**Fits comfortably on the existing CaveTak EC2** at the PRD's "hundreds of users"
+**Fits comfortably on the existing UpstreamWX EC2** at the PRD's "hundreds of users"
 scale (PRD §11.3). The recurring SREF job's real constraints are:
 
 - **Peak memory** during decode (~0.5 GB observed for a modest field set; keep an eye

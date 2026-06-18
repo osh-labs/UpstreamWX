@@ -17,7 +17,7 @@ from pathlib import Path
 
 import geopandas as gpd
 
-from cavetak_weather.watershed import HucResult, UpstreamTrace, resolve_huc12, trace_upstream
+from upstreamwx.watershed import HucResult, UpstreamTrace, resolve_huc12, trace_upstream
 
 
 def run(lat: float, lon: float, name: str | None = None) -> tuple[HucResult, UpstreamTrace, float]:

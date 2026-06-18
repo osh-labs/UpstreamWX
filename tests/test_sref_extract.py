@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from cavetak_weather.sref.extract import open_subset
-from cavetak_weather.sref.fetch import parse_idx, select_messages
+from upstreamwx.sref.extract import open_subset
+from upstreamwx.sref.fetch import parse_idx, select_messages
 
 SAMPLE_IDX = (
     "182:23009013:d=2026061715:APCP:surface:0-3 hour acc fcst:prob >0.25:prob fcst 0/26:x\n"
@@ -56,7 +56,7 @@ def test_open_sample_subset(fixtures_dir: Path) -> None:
 
 @pytest.mark.network
 def test_live_latest_cycle_and_field() -> None:
-    from cavetak_weather.sref import latest_available_cycle, load_probability_field
+    from upstreamwx.sref import latest_available_cycle, load_probability_field
 
     cycle = latest_available_cycle()
     assert cycle is not None, "no live SREF cycle found on NOMADS"

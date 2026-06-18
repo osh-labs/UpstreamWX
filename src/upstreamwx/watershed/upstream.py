@@ -1,6 +1,6 @@
 """Upstream contributing-watershed trace (PRD FR-3).
 
-Given a containing HUC-12 (:class:`~cavetak_weather.watershed.huc.HucResult`),
+Given a containing HUC-12 (:class:`~upstreamwx.watershed.huc.HucResult`),
 deterministically collect every HUC-12 that drains *into* it and dissolve their
 boundaries into a single upstream domain polygon. This polygon is the
 aggregation domain consumed by the SREF processor (Spike A).

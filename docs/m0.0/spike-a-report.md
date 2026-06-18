@@ -1,7 +1,7 @@
 # Spike A — SREF over a Polygon (M0.0)
 
 **Date:** 2026-06-18
-**Code:** `src/cavetak_weather/sref/` · CLI `spikes/spike_a_sref/run_spike_a.py`
+**Code:** `src/upstreamwx/sref/` · CLI `spikes/spike_a_sref/run_spike_a.py`
 
 ## Feasibility verdict: **YES**
 

@@ -1,7 +1,7 @@
-# CaveTAK-Weather
+# UpstreamWX
 
 Mission-specific, multi-hazard weather briefings for **caving and canyoneering**
-across the contiguous US. CaveTAK-Weather synthesizes NWS products, Open-Meteo
+across the contiguous US. UpstreamWX synthesizes NWS products, Open-Meteo
 derived fields, and in-house **SREF ensemble** processing into a BLUF/SITREP
 covering four life-safety hazards — **flash flooding, lightning, heat stress, and
 cold/wet hypothermia** — with **upstream-watershed aggregation** for flash flood as
@@ -11,7 +11,7 @@ It is a free, donation-supported PWA and is **reference-only**: it surfaces haza
 assessment and links to authoritative sources for verification; it never issues a
 go/no-go decision.
 
-See [`CaveTak-Weather-PRD-v0.8.md`](CaveTak-Weather-PRD-v0.8.md) and
+See [`UpstreamWX-PRD-v0.8.md`](UpstreamWX-PRD-v0.8.md) and
 [`roadmap.md`](roadmap.md).
 
 ## Status — M0.0 (Foundation & De-Risk Spikes)
@@ -19,10 +19,10 @@ See [`CaveTak-Weather-PRD-v0.8.md`](CaveTak-Weather-PRD-v0.8.md) and
 Both hard-unknown feasibility spikes are **resolved YES** against live data
 (2026-06-18). See [`docs/m0.0/`](docs/m0.0/).
 
-- **Spike A — SREF over a polygon** (`src/cavetak_weather/sref/`): native SREF GRIB2
+- **Spike A — SREF over a polygon** (`src/upstreamwx/sref/`): native SREF GRIB2
   is retrievable from NOMADS `ensprod`; P(precip)/P(CAPE)/spread extract and aggregate
   over a watershed polygon via `.idx` byte-range subsetting. → [report](docs/m0.0/spike-a-report.md)
-- **Spike B — upstream HUC-12 trace** (`src/cavetak_weather/watershed/`): arbitrary
+- **Spike B — upstream HUC-12 trace** (`src/upstreamwx/watershed/`): arbitrary
   CONUS lat/lon → containing HUC-12 → deterministic upstream contributing-area trace
   from USGS WBD. → [report](docs/m0.0/spike-b-report.md)
 - **SREF resource profile** for EC2 sizing → [report](docs/m0.0/resource-profile.md)
@@ -54,7 +54,7 @@ uv pip install -e ".[dev]"
 ## Layout
 
 ```
-src/cavetak_weather/   backend package
+src/upstreamwx/   backend package
   watershed/           Spike B -> M0.1 watershed module (HUC-12 + upstream trace)
   sref/                Spike A -> M0.1 SREF processor (fetch/extract/aggregate)
   engine/ ingest/ sitrep/   placeholders for M0.1-M0.2

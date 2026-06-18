@@ -2,7 +2,7 @@
 
 Spike B home; promoted to a real module (HUC-12 resolve + upstream trace + cache)
 in M0.1. The upstream contributing-area polygon produced here is the aggregation
-domain consumed by the SREF processor (``cavetak_weather.sref``).
+domain consumed by the SREF processor (``upstreamwx.sref``).
 """
 
 from .huc import HucResult, resolve_huc12

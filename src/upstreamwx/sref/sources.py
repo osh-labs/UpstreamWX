@@ -19,7 +19,7 @@ Findings from M0.0 source discovery (2026-06-18), recorded so the logic is groun
 * Two grids: ``pgrb132`` (AWIPS 132, ~16 km, 697x553 Lambert — preferred) and
   ``pgrb212`` (~40 km).
 * **Full product files are large** (prob ~660 MB, spread/mean ~370 MB), so the
-  ``.idx`` sidecar + HTTP Range subsetting (see :mod:`cavetak_weather.sref.fetch`)
+  ``.idx`` sidecar + HTTP Range subsetting (see :mod:`upstreamwx.sref.fetch`)
   is mandatory, not an optimization.
 * Retention on NOMADS is short (~2 days of cycles); a production deployment must
   pull each cycle promptly on its schedule.
@@ -39,7 +39,7 @@ DEFAULT_FREQ = "3hrly"
 PRODUCTS = ("prob", "spread", "mean", "max", "min", "p10", "p25", "p50", "p75", "p90")
 
 # Polite identifier; NOMADS rejects some default agents.
-USER_AGENT = "CaveTAK-Weather/0.0 (M0.0 SREF spike; +https://weather.cavetak.com)"
+USER_AGENT = "UpstreamWX/0.0 (M0.0 SREF spike; +https://upstreamwx.com)"
 _HEADERS = {"User-Agent": USER_AGENT}
 
 

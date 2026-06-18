@@ -26,7 +26,7 @@ committing to M0.1 architecture (roadmap §M0.0). **Both are resolved YES.**
 - **SREF (Spike A → scheduled job):** use NOMADS `ensprod` probability/spread
   products with `.idx` byte-range subsetting. Download the needed CONUS field set
   **once per cycle**, then aggregate every active domain from the cached grid — so
-  recurring cost scales with cycles/day, not domains. Fits the existing CaveTak EC2.
+  recurring cost scales with cycles/day, not domains. Fits the existing UpstreamWX EC2.
 - **Coarse grid caveat:** the ~16 km SREF grid undersamples small headwater HUC-12s;
   coverage-weighted aggregation (`exactextract`) is the v1.x refinement. The nearest-
   cell fallback is in place and flagged.

@@ -42,7 +42,7 @@ def test_fixture_metadata(fixtures_dir):
 
 @pytest.mark.network
 def test_resolve_and_trace_live():
-    from cavetak_weather.watershed import resolve_huc12, trace_upstream
+    from upstreamwx.watershed import resolve_huc12, trace_upstream
 
     lat, lon = 37.0192, -111.9889  # Buckskin Gulch
     huc = resolve_huc12(lat, lon)

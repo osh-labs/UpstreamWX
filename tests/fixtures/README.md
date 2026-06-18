@@ -52,8 +52,8 @@ extraction + aggregation logic is testable offline.
 
 ```sh
 .venv/bin/python - <<'PY'
-from cavetak_weather.sref import latest_available_cycle
-from cavetak_weather.sref.fetch import fetch_idx, select_messages, download_subset
+from upstreamwx.sref import latest_available_cycle
+from upstreamwx.sref.fetch import fetch_idx, select_messages, download_subset
 cyc = latest_available_cycle()
 idx = fetch_idx(cyc.idx_url(product="prob"))
 windows = {"0-3 hour acc fcst","3-6 hour acc fcst","6-9 hour acc fcst","9-12 hour acc fcst"}
