@@ -1,63 +1,141 @@
 {
-  "_comment": "Live briefing for Cagle's Chasm, 2026-06-18. Generated from a real engine run against live NWS/SREF/HREF/Open-Meteo ingest. At M0.4 this fetch is swapped for POST /v1/briefing; the render layer is unchanged.",
+  "_comment": "Live briefing for Pettyjohn's Cave, 2026-06-18. Generated from a real engine run against live NWS/SREF/HREF/Open-Meteo ingest. At M0.4 this fetch is swapped for POST /v1/briefing; the render layer is unchanged.",
   "mission": {
-    "name": "Cagle's Chasm",
+    "name": "Pettyjohn's Cave",
     "activity": "cave",
     "is_slot": false,
-    "lat": 35.001042,
-    "lon": -85.744611,
-    "huc12": ["060300010201"],
-    "window_start": "2026-06-18T13:00:00-05:00",
-    "window_end": "2026-06-18T22:00:00-05:00",
+    "lat": 34.665,
+    "lon": -85.361667,
+    "huc12": [],
+    "window_start": "2026-06-18T13:00:00-04:00",
+    "window_end": "2026-06-18T22:00:00-04:00",
     "phases_inferred": true,
-    "timezone": "CDT"
+    "timezone": "EDT"
   },
   "watershed": {
-    "huc12": ["060300010201"],
-    "area_sq_mi": 21.0,
+    "huc12": [],
+    "area_sq_mi": 2.7,
     "geometry": {
       "type": "Polygon",
-      "coordinates": [[
-        [-85.790, 34.972], [-85.772, 35.008], [-85.752, 35.035], [-85.730, 35.048],
-        [-85.704, 35.038], [-85.694, 35.008], [-85.710, 34.978], [-85.736, 34.962],
-        [-85.764, 34.960], [-85.790, 34.972]
-      ]]
+      "coordinates": [
+        [
+          [
+            -85.399,
+            34.665
+          ],
+          [
+            -85.395,
+            34.668
+          ],
+          [
+            -85.399,
+            34.669
+          ],
+          [
+            -85.391,
+            34.675
+          ],
+          [
+            -85.396,
+            34.677
+          ],
+          [
+            -85.395,
+            34.68
+          ],
+          [
+            -85.389,
+            34.684
+          ],
+          [
+            -85.387,
+            34.696
+          ],
+          [
+            -85.383,
+            34.698
+          ],
+          [
+            -85.362,
+            34.678
+          ],
+          [
+            -85.363,
+            34.671
+          ],
+          [
+            -85.359,
+            34.663
+          ],
+          [
+            -85.36,
+            34.66
+          ],
+          [
+            -85.363,
+            34.661
+          ],
+          [
+            -85.38,
+            34.673
+          ],
+          [
+            -85.385,
+            34.672
+          ],
+          [
+            -85.39,
+            34.666
+          ],
+          [
+            -85.399,
+            34.665
+          ]
+        ]
+      ]
     }
   },
   "overall_posture": "Extreme",
   "overall_confidence": "Moderate",
   "threshold_version": "flash_flood=1.2.0;lightning=1.1.0;heat=1.0.0;cold_wet=1.0.0;confidence=1.0.0",
-  "generated_at": "2026-06-18T15:04:00+00:00",
-  "cache_cycle": "2026061809z",
+  "generated_at": "2026-06-18T16:20:40.058819+00:00",
+  "cache_cycle": "2026061815z",
   "framed": false,
   "cached": false,
   "degraded": false,
-  "sources_ok": { "nws": true, "open_meteo": true, "spc": true, "sref": true, "href": true, "watershed": true },
+  "sources_ok": {
+    "nws": true,
+    "open_meteo": true,
+    "spc": true,
+    "watershed": true,
+    "sref": true,
+    "href": true
+  },
   "warnings": [],
-  "summary": "Widespread afternoon and evening thunderstorm activity dominates the window — SREF places thunderstorm probability at 96% over the region. Lightning is Extreme during the exposed approach (1300–1400) and egress (2100–2200); the cave interior shelters the technical span from that hazard. Flash flood is Elevated for the 7-hour cave passage (SREF 58%, HREF 22%); NWS hourly shows precip probability at 52–74% through the window with a stormy pattern. Heat reaches Extreme Caution on the surface approach (NWS heat index 90 °F). Cold/wet remains Minimal — egress temperatures of 71 °F with a damp party are in the safe band. Phases were inferred from the overall window. Verify against the linked NWS sources (WFO MRX) before entry.",
+  "summary": "Flash flood is High (SREF 65%, HREF 4%). Lightning is Extreme \u2014 SREF places thunderstorm probability at 92%. Heat reaches Caution on the surface approach (NWS heat index 87 \u00b0F). Cold/wet is Minimal \u2014 apparent temperature 72 \u00b0F on egress. Phases were inferred from the overall window. Verify against the linked NWS sources before entry.",
   "bluf": [
     {
       "hazard": "flash_flood",
-      "label": "Elevated",
-      "severity_class": "sev-elevated",
+      "label": "High",
+      "severity_class": "sev-high",
       "confidence": "Moderate",
-      "window": "1400–2100",
+      "window": "1400\u20132100",
       "is_persistent": false
     },
     {
       "hazard": "lightning",
       "label": "Extreme",
       "severity_class": "sev-extreme",
-      "confidence": "High",
-      "window": "1300–1400",
+      "confidence": "Moderate",
+      "window": "1300\u20131400",
       "is_persistent": false
     },
     {
       "hazard": "heat",
-      "label": "Extreme Caution",
-      "severity_class": "heat-extreme_caution",
+      "label": "Caution",
+      "severity_class": "heat-caution",
       "confidence": "Moderate",
-      "window": "1300–1400",
+      "window": "1300\u20131400",
       "is_persistent": false
     },
     {
@@ -70,34 +148,58 @@
     }
   ],
   "metrics": [
-    { "label": "Temp", "icon": "heat", "value": "77", "unit": "°F", "sub": "Feels 90°" },
-    { "label": "Wind", "icon": "cold_wet", "value": "10", "unit": "mph", "sub": "Gust 25" },
-    { "label": "Precip", "icon": "flash_flood", "value": "65", "unit": "%", "sub": "0.4 in" },
-    { "label": "T-storm", "icon": "lightning", "value": "96", "unit": "%", "sub": "SREF P(tstm)" }
+    {
+      "label": "Temp",
+      "icon": "heat",
+      "value": "85",
+      "unit": "\u00b0F",
+      "sub": "Feels 87\u00b0"
+    },
+    {
+      "label": "Wind",
+      "icon": "cold_wet",
+      "value": "20",
+      "unit": "mph",
+      "sub": "Gust 38"
+    },
+    {
+      "label": "Precip",
+      "icon": "flash_flood",
+      "value": "71",
+      "unit": "%",
+      "sub": "0.8 in"
+    },
+    {
+      "label": "T-storm",
+      "icon": "lightning",
+      "value": "92",
+      "unit": "%",
+      "sub": "SREF P(tstm)"
+    }
   ],
   "phases": [
     {
       "phase": "approach",
-      "window": "1300–1400",
+      "window": "1300\u20131400",
       "thermal_primary": "heat",
-      "lead_label": "Lightning — Extreme",
-      "applicable": "Lightning, Heat ↑, Cold/wet",
+      "lead_label": "Lightning \u2014 Extreme",
+      "applicable": "Lightning, Heat \u2191, Cold/wet",
       "note": null
     },
     {
       "phase": "technical",
-      "window": "1400–2100",
-      "thermal_primary": "cold_wet",
-      "lead_label": "Flash flood — Elevated",
-      "applicable": "Flash flood (cave interior — surface hazards excluded, FR-14c)",
+      "window": "1400\u20132100",
+      "thermal_primary": null,
+      "lead_label": "Flash flood \u2014 High",
+      "applicable": "Flash flood",
       "note": "Cave interior: surface weather isolation applied; only flash flood evaluated for this span (FR-14c)."
     },
     {
       "phase": "egress",
-      "window": "2100–2200",
+      "window": "2100\u20132200",
       "thermal_primary": "cold_wet",
-      "lead_label": "Lightning — Extreme",
-      "applicable": "Lightning, Cold/wet, Heat",
+      "lead_label": "Lightning \u2014 Extreme",
+      "applicable": "Lightning, Cold/wet, Heat \u2191",
       "note": null
     }
   ],
@@ -105,78 +207,124 @@
     {
       "hazard": "flash_flood",
       "cells": [
-        { "phase": "approach", "applicable": false },
-        { "phase": "technical", "severity": "elevated", "confidence": "moderate", "persistent": false },
-        { "phase": "egress", "applicable": false }
+        {
+          "phase": "approach",
+          "applicable": false
+        },
+        {
+          "phase": "technical",
+          "severity": "high",
+          "confidence": "moderate",
+          "persistent": false
+        },
+        {
+          "phase": "egress",
+          "applicable": false
+        }
       ]
     },
     {
       "hazard": "lightning",
       "cells": [
-        { "phase": "approach", "severity": "extreme", "confidence": "high", "persistent": true },
-        { "phase": "technical", "applicable": false },
-        { "phase": "egress", "severity": "extreme", "confidence": "high", "persistent": true }
+        {
+          "phase": "approach",
+          "severity": "extreme",
+          "confidence": "moderate",
+          "persistent": false
+        },
+        {
+          "phase": "technical",
+          "applicable": false
+        },
+        {
+          "phase": "egress",
+          "severity": "extreme",
+          "confidence": "moderate",
+          "persistent": false
+        }
       ]
     },
     {
       "hazard": "heat",
       "cells": [
-        { "phase": "approach", "severity": "extreme_caution", "confidence": "moderate", "persistent": true },
-        { "phase": "technical", "applicable": false },
-        { "phase": "egress", "severity": "extreme_caution", "confidence": "moderate", "persistent": false }
+        {
+          "phase": "approach",
+          "severity": "caution",
+          "confidence": "moderate",
+          "persistent": false
+        },
+        {
+          "phase": "technical",
+          "applicable": false
+        },
+        {
+          "phase": "egress",
+          "severity": "caution",
+          "confidence": "moderate",
+          "persistent": false
+        }
       ]
     },
     {
       "hazard": "cold_wet",
       "cells": [
-        { "phase": "approach", "severity": "minimal", "confidence": "moderate", "persistent": true },
-        { "phase": "technical", "applicable": false },
-        { "phase": "egress", "severity": "minimal", "confidence": "moderate", "persistent": false }
+        {
+          "phase": "approach",
+          "severity": "minimal",
+          "confidence": "moderate",
+          "persistent": true
+        },
+        {
+          "phase": "technical",
+          "applicable": false
+        },
+        {
+          "phase": "egress",
+          "severity": "minimal",
+          "confidence": "moderate",
+          "persistent": true
+        }
       ]
     }
   ],
   "hazard_detail": [
     {
       "hazard": "flash_flood",
-      "label": "Elevated",
-      "severity_class": "sev-elevated",
+      "label": "High",
+      "severity_class": "sev-high",
       "confidence": "Moderate",
       "drivers": [
-        "SREF P(precip/thunder) 58% — in the 20–60% band with measurable forecast precip",
-        "AFD (WFO MRX): excessive-rainfall and flooding discussion concurs",
-        "HREF neighborhood P(QPF ≥0.5 in/1 h) 22% — same-day high-res sharpening (FR-7a)",
-        "NWS hourly: precip probability 52–74% through the technical span, all convective"
+        "SREF P(precip/thunder) 65% \u2265 60% over upstream domain",
+        "AFD excessive-rainfall / flooding discussion concurs"
       ],
-      "logic": "Extreme = active Flash Flood Warning; High = Watch OR SREF ≥60% w/ convective rate; Elevated = SREF 20–59% in 20–60% band OR HREF NEP(≥0.5 in/1 h) 20–39% (Appendix B §16.1).",
-      "assumptions": ["Karst cave: surface HUC-12 delineation proxies for karst recharge; true recharge zone may not follow surface topography (FR-4)."]
+      "logic": "Extreme = active Flash Flood Warning; High = Watch OR SREF \u226560% w/ convective rate; Elevated = SREF 20\u201359% OR HREF NEP(\u22650.5 in/1 h) 20\u201339% (Appendix B \u00a716.1).",
+      "assumptions": []
     },
     {
       "hazard": "lightning",
       "label": "Extreme",
       "severity_class": "sev-extreme",
-      "confidence": "High",
+      "confidence": "Moderate",
       "drivers": [
-        "SREF P(thunderstorm) 96% ≥ 70% — Extreme threshold (Appendix B §16.2)",
-        "SPC marginal convective risk over the window",
-        "AFD (WFO MRX): isolated to scattered afternoon thunderstorm activity",
-        "HREF neighborhood P(lightning) 24% ≥ 10% — same-day high-resolution sharpening (FR-7a)",
-        "NWS hourly: Showers And Thunderstorms Likely 1300–2100"
+        "SREF P(tstm) 92% \u2265 70%",
+        "SPC marginal risk over window",
+        "AFD mentions isolated/scattered afternoon convection"
       ],
-      "logic": "Extreme = SREF P(tstm) ≥70% OR SPC Moderate+ during any exposed phase (Appendix B §16.2). Cave interior excluded for the technical span (FR-14c).",
-      "assumptions": ["Lightning applies on the surface approach and egress only; the cave technical span is treated as sheltered from surface convective hazards (FR-14c)."]
+      "logic": "Extreme = SREF P(tstm) \u226570% OR SPC Moderate+ during any exposed phase (Appendix B \u00a716.2). Cave interior excluded for the technical span (FR-14c).",
+      "assumptions": []
     },
     {
       "hazard": "heat",
-      "label": "Extreme Caution",
-      "severity_class": "heat-extreme_caution",
+      "label": "Caution",
+      "severity_class": "heat-caution",
       "confidence": "Moderate",
       "drivers": [
-        "Heat index 90 °F on approach — NWS Extreme Caution band (90–103 °F, FR-15)",
-        "NWS point forecast: 77 °F / high humidity at 1300 CDT with pre-storm air mass",
-        "Approach exertion under load: effective heat strain runs one category hotter"
+        "Heat index 87 \u00b0F \u2192 Caution"
       ],
-      "logic": "Uses NWS Heat Index categories directly (FR-15): Caution 80–90 °F, Extreme Caution 90–103 °F, Danger 103–124 °F, Extreme Danger ≥125 °F. Surface hazard only — heat does not apply in the cave technical span (FR-14c).",
-      "assumptions": ["Approach advisory: effective heat strain runs one category hotter under load (Appendix B §16.3)."]
+      "logic": "Uses NWS Heat Index categories (FR-15): Caution 80\u201390 \u00b0F, Extreme Caution 90\u2013103 \u00b0F, Danger 103\u2013124 \u00b0F, Extreme Danger \u2265125 \u00b0F. Surface hazard only \u2014 cave interior excluded (FR-14c).",
+      "assumptions": [
+        "Approach involves exertion under load: effective heat strain runs one category hotter than the ambient heat index suggests."
+      ]
     },
     {
       "hazard": "cold_wet",
@@ -184,38 +332,211 @@
       "severity_class": "sev-minimal",
       "confidence": "Moderate",
       "drivers": [
-        "Apparent temperature 80 °F on egress (wet-party basis) — above the Elevated band",
-        "NWS point forecast: 71 °F at 2100–2200 CDT with 0 mph wind",
-        "Wet-party assumption on egress (FR-16)"
+        "Apparent temperature 72 \u00b0F (wet-party basis)"
       ],
-      "logic": "Minimal = apparent temp > 60 °F for a wet party (Appendix B §16.4). Elevated band starts below 60 °F. Bands are warmer than dry-cold thresholds because wet clothing loses insulation.",
-      "assumptions": ["Posture assumes the party exits wet (FR-16); discount to Minimal is already in effect at these egress temperatures."]
+      "logic": "Minimal = apparent temp >60 \u00b0F for a wet party (Appendix B \u00a716.4). Elevated band starts below 60 \u00b0F. Bands are warmer than dry-cold thresholds because wet clothing loses insulation.",
+      "assumptions": [
+        "Assumes a wet party on egress (FR-16)."
+      ]
     }
   ],
   "forecast_hourly": {
-    "hours": ["1300", "1400", "1500", "1600", "1700", "1800", "1900", "2000", "2100", "2200"],
+    "hours": [
+      "1300",
+      "1400",
+      "1500",
+      "1600",
+      "1700",
+      "1800",
+      "1900",
+      "2000",
+      "2100",
+      "2200"
+    ],
     "rows": [
-      { "label": "Sky",       "values": ["⛈",  "⛈",  "⛈",  "⛈",  "⛈",  "⛈",  "⛈",  "⛈",  "⛈",  "🌧"] },
-      { "label": "Temp °F",   "values": ["77", "77", "77", "75", "75", "74", "73", "72", "71", "71"] },
-      { "label": "Feels °F",  "values": ["90", "88", "88", "85", "83", "81", "79", "77", "76", "75"] },
-      { "label": "Wind mph",  "values": ["10", "10", "10", "10",  "5",  "5",  "5",  "5",  "0",  "0"] },
-      { "label": "Gust mph",  "values": ["25", "20", "25", "25", "20", "25", "20", "15", "10",  "8"] },
-      { "label": "Precip %",  "values": ["65", "52", "73", "59", "55", "74", "67", "51", "37", "34"] },
-      { "label": "QPF in",    "values": ["0.1", "0.1", "0.3", "0.2", "0.2", "0.3", "0.2", "0.1", "0.1", "0.0"] }
+      {
+        "label": "Sky",
+        "values": [
+          "\u26c5",
+          "\u26c5",
+          "\u26c5",
+          "\ud83c\udf27\ufe0f",
+          "\u26c5",
+          "\ud83c\udf26\ufe0f",
+          "\ud83c\udf26\ufe0f",
+          "\ud83c\udf26\ufe0f",
+          "\ud83c\udf27\ufe0f",
+          "\ud83c\udf27\ufe0f"
+        ]
+      },
+      {
+        "label": "Temp \u00b0F",
+        "values": [
+          "83",
+          "85",
+          "84",
+          "72",
+          "74",
+          "75",
+          "74",
+          "72",
+          "72",
+          "71"
+        ]
+      },
+      {
+        "label": "Feels \u00b0F",
+        "values": [
+          "87",
+          "87",
+          "86",
+          "72",
+          "75",
+          "77",
+          "77",
+          "77",
+          "76",
+          "76"
+        ]
+      },
+      {
+        "label": "Wind mph",
+        "values": [
+          "13",
+          "14",
+          "17",
+          "20",
+          "15",
+          "12",
+          "11",
+          "8",
+          "8",
+          "6"
+        ]
+      },
+      {
+        "label": "Gust mph",
+        "values": [
+          "23",
+          "24",
+          "28",
+          "38",
+          "32",
+          "30",
+          "23",
+          "17",
+          "18",
+          "15"
+        ]
+      },
+      {
+        "label": "Precip %",
+        "values": [
+          "29",
+          "35",
+          "30",
+          "44",
+          "46",
+          "66",
+          "68",
+          "71",
+          "62",
+          "65"
+        ]
+      },
+      {
+        "label": "QPF in",
+        "values": [
+          "0.0",
+          "0.0",
+          "0.0",
+          "0.3",
+          "0.0",
+          "0.0",
+          "0.0",
+          "0.0",
+          "0.1",
+          "0.3"
+        ]
+      }
     ]
   },
   "temp_series": {
-    "air":   [77, 77, 77, 75, 75, 74, 73, 72, 71, 71],
-    "feels": [90, 88, 88, 85, 83, 81, 79, 77, 76, 75]
+    "air": [
+      83,
+      85,
+      84,
+      72,
+      74,
+      75,
+      74,
+      72,
+      72,
+      71
+    ],
+    "feels": [
+      87,
+      87,
+      86,
+      72,
+      75,
+      77,
+      77,
+      77,
+      76,
+      76
+    ]
   },
   "wind_series": {
-    "wind": [10, 10, 10, 10, 5, 5, 5, 5, 0, 0],
-    "gust": [25, 20, 25, 25, 20, 25, 20, 15, 10, 8]
+    "wind": [
+      13,
+      14,
+      17,
+      20,
+      15,
+      12,
+      11,
+      8,
+      8,
+      6
+    ],
+    "gust": [
+      23,
+      24,
+      28,
+      38,
+      32,
+      30,
+      23,
+      17,
+      18,
+      15
+    ]
   },
   "resources": [
-    { "icon": "doc",   "title": "NWS Area Forecast Discussion", "sub": "WFO Morristown (MRX) — verify forecaster reasoning", "url": "https://forecast.weather.gov/product.php?site=MRX&product=AFD&issuedby=MRX" },
-    { "icon": "alert", "title": "Active alerts (watches / warnings)", "sub": "api.weather.gov active alerts for the zone", "url": "https://api.weather.gov/alerts/active?point=35.0010,-85.7446" },
-    { "icon": "model", "title": "Model & ensemble source", "sub": "Open-Meteo (HRRR-derived) · SREF + HREF (NOMADS ensprod, in-house)", "url": "https://open-meteo.com/" },
-    { "icon": "calc",  "title": "How this is calculated", "sub": "Versioned threshold matrices — Appendix B (threshold v2026-06-18)", "url": "#" }
+    {
+      "icon": "doc",
+      "title": "NWS Area Forecast Discussion",
+      "sub": "WFO FFC \u2014 verify forecaster reasoning",
+      "url": "https://forecast.weather.gov/product.php?site=FFC&product=AFD&issuedby=FFC"
+    },
+    {
+      "icon": "alert",
+      "title": "Active alerts (watches / warnings)",
+      "sub": "api.weather.gov active alerts for the zone",
+      "url": "https://api.weather.gov/alerts/active?point=34.665,-85.361667"
+    },
+    {
+      "icon": "model",
+      "title": "Model & ensemble source",
+      "sub": "Open-Meteo (HRRR-derived) \u00b7 SREF + HREF (NOMADS ensprod, in-house)",
+      "url": "https://open-meteo.com/"
+    },
+    {
+      "icon": "calc",
+      "title": "How this is calculated",
+      "sub": "Versioned threshold matrices \u2014 Appendix B (threshold v2026-06-18)",
+      "url": "#"
+    }
   ]
 }
