@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # contact (FR-5). Override via UPSTREAMWX_NWS_USER_AGENT to your own contact.
     nws_user_agent: str = "UpstreamWX/0.1 (+https://upstreamwx.com)"
 
+    # Start the M0.3 API's background refresh scheduler on app startup (FR-12). Default
+    # on for the always-on EC2 service; set UPSTREAMWX_API_ENABLE_SCHEDULER=0 to run the
+    # API without the recurring loop (e.g. tests, or a worker-less deployment).
+    api_enable_scheduler: bool = True
+
     # Anthropic API key for the M0.2 SITREP Haiku framing layer (FR-21). Read from the
     # standard ANTHROPIC_API_KEY name; the validation_alias bypasses the env_prefix above.
     anthropic_api_key: str | None = Field(

@@ -26,12 +26,8 @@ from pathlib import Path
 
 import yaml
 
-from ..config import get_settings
-from ..engine.assess import assess
 from ..engine.models import ActivityType, HazardInputs, Mission
-from ..ingest.base import IngestBundle
-from .frame import frame_briefing
-from .render import render_md
+from .generate import generate_briefing
 
 
 def _parse_dt(value: str) -> datetime:
@@ -104,35 +100,18 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     mission = _build_mission(args)
 
-    upstream = None
-    if args.inputs is not None:
-        inputs = _load_inputs(args.inputs)
-        bundle: IngestBundle | None = None
-    else:
-        from ..ingest.orchestrator import gather_inputs
-
-        inputs, bundle = gather_inputs(mission)
-        # The orchestrator delineates the upstream domain (NLDI raindrop two-step,
-        # WBD fallback) and attaches it to the bundle; reuse it for the header so we
-        # don't trace twice. None when delineation failed (header degrades, NFR-6).
-        upstream = bundle.upstream if bundle is not None else None
-        if upstream is None and bundle is not None and bundle.sources_ok.get("watershed") is False:
-            print("warning: upstream delineation unavailable", file=sys.stderr)
-
-    result = assess(mission, inputs)
-    structured = render_md(
-        result, upstream=upstream, bundle=bundle, generated_at=datetime.now(UTC)
+    inputs = _load_inputs(args.inputs) if args.inputs is not None else None
+    briefing = generate_briefing(
+        mission, inputs=inputs, frame=args.frame, generated_at=datetime.now(UTC)
     )
-
-    # Frame when explicitly requested, or by default when a key is present (FR-21).
-    want_frame = args.frame if args.frame is not None else bool(get_settings().anthropic_api_key)
-    output = frame_briefing(result, structured) if want_frame else structured
+    for warning in briefing.warnings:
+        print(f"warning: {warning}", file=sys.stderr)
 
     if args.out is not None:
-        args.out.write_text(output)
+        args.out.write_text(briefing.markdown)
         print(f"wrote briefing -> {args.out}", file=sys.stderr)
     else:
-        sys.stdout.write(output)
+        sys.stdout.write(briefing.markdown)
     return 0
 
 
