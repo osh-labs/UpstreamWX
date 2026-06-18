@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     # Optional override for the HREF source base URL (same-day supplement, Spike C).
     href_base_url: str | None = None
 
+    # The NWS API (api.weather.gov) requires a self-identifying User-Agent with a
+    # contact (FR-5). Override via UPSTREAMWX_NWS_USER_AGENT to your own contact.
+    nws_user_agent: str = "UpstreamWX/0.1 (+https://upstreamwx.com)"
+
     def ensure_data_dir(self) -> Path:
         """Create and return the data cache directory."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
