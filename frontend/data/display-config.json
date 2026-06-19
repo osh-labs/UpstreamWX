@@ -7,9 +7,9 @@
   },
   "heat_labels": {
     "None": "None",
-    "Caution": "Caution",
-    "Extreme Caution": "Extreme Caution",
-    "Danger": "Danger",
-    "Extreme Danger": "Extreme Danger"
+    "Caution": "Low Exposure",
+    "Extreme Caution": "Moderate Exposure",
+    "Danger": "High Exposure",
+    "Extreme Danger": "Extreme Exposure"
   }
 }
