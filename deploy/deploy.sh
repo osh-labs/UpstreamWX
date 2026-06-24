@@ -7,7 +7,7 @@
 # refreshes the venv (uv), reinstalls the package, restarts the systemd service, and
 # blocks on a /v1/health check so a bad deploy fails loudly instead of silently.
 #
-# Run on the host directly, or remotely via deploy/remote-deploy.sh from a dev machine.
+# Run on the server (SSH in, then invoke it); the server pulls its own code from git.
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib.sh"
 load_config

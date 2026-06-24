@@ -89,8 +89,8 @@ deploy/                always-on backend deploy (systemd + nginx) -> EC2
 ## Deploy
 
 The always-on briefing backend (FastAPI `upstreamwx-api`, serving the PWA single-origin
-with the SREF-cycle refresh scheduler) deploys to the EC2 host via `deploy/`: run
-`deploy/bootstrap.sh` once on the host, then `deploy/remote-deploy.sh <ref>` per release.
+with the SREF-cycle refresh scheduler) deploys to the EC2 server via `deploy/`: SSH in,
+run `deploy/bootstrap.sh` once, then `deploy/deploy.sh <ref>` per release.
 See [`deploy/README.md`](deploy/README.md).
 
 Licensed under GPL-3.0 (see `LICENSE`).
