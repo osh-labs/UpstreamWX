@@ -3,7 +3,7 @@
 #
 # Provides: coloured logging, config loading (deploy/config.env with env overrides),
 # and __TOKEN__ rendering for the systemd/nginx templates. Keeping this in one place
-# means bootstrap.sh / deploy.sh / remote-deploy.sh agree on paths by construction.
+# means bootstrap.sh and deploy.sh agree on paths by construction.
 
 set -euo pipefail
 
@@ -36,7 +36,7 @@ load_config() {
     : "${DEPLOY_ENV_FILE:=/etc/upstreamwx/upstreamwx.env}"
     : "${DEPLOY_BIND_HOST:=127.0.0.1}"
     : "${DEPLOY_BIND_PORT:=8000}"
-    : "${DEPLOY_SERVER_NAME:=upstreamwx.example.com}"
+    : "${DEPLOY_SERVER_NAME:=upstreamwx.com}"
     : "${DEPLOY_SERVICE:=upstreamwx-api}"
 }
 

@@ -29,11 +29,10 @@ answers `/v1/briefing`, `/v1/health`, and the static PWA.
 
 | File | Role |
 | --- | --- |
-| `config.env.example` | deploy target (host, repo, branch, paths) — copy to `config.env` |
+| `config.env.example` | deploy target (repo, branch, paths, server name) — copy to `config.env` |
 | `upstreamwx.env.example` | runtime env/secrets template → `/etc/upstreamwx/upstreamwx.env` |
-| `bootstrap.sh` | **one-time** host provisioning (run as root on the host) |
-| `deploy.sh` | update + restart on the host (run for every release) |
-| `remote-deploy.sh` | trigger `deploy.sh` over SSH from your dev machine |
+| `bootstrap.sh` | **one-time** server provisioning (run as root on the server) |
+| `deploy.sh` | update + restart on the server (run for every release) |
 | `systemd/upstreamwx-api.service` | systemd unit template (`__TOKENS__` rendered at install) |
 | `nginx/upstreamwx.conf` | nginx site template |
 | `_lib.sh` | shared logging / config / template rendering (sourced, not run) |
@@ -44,21 +43,25 @@ The `systemd` and `nginx` files are **templates**: `bootstrap.sh` substitutes th
 
 ---
 
+## Deployment model
+
+Everything runs **on the server**: you SSH in, clone the repo to get the scripts, and
+run them there. There is no push-from-laptop step — the server pulls its own code from
+git. You need: an EC2 instance (Ubuntu/Debian recommended), a sudo login, DNS pointed at
+it (`upstreamwx.com`), and security-group ingress on 80/443.
+
 ## First-time install
 
-Provisioning runs **on the host**, and the host pulls the code from git itself (nothing
-is copied over SSH). You need: an EC2 instance (Ubuntu/Debian recommended), a sudo
-login, a DNS name pointed at it, and security-group ingress on 80/443.
-
 ```sh
-# On the host:
+# SSH into the server, then:
 sudo apt-get update && sudo apt-get install -y git
 git clone https://github.com/osh-labs/upstreamwx.git /tmp/upstreamwx-src
 cd /tmp/upstreamwx-src
 
-# Configure the target (host name, paths, branch):
+# Configure the target (server name, paths, branch). The defaults already point at
+# upstreamwx.com and the standard /opt + /var/lib layout, so usually no edits are needed.
 cp deploy/config.env.example deploy/config.env
-nano deploy/config.env          # set DEPLOY_SERVER_NAME, DEPLOY_BRANCH, etc.
+nano deploy/config.env          # optional: override DEPLOY_BRANCH, paths, etc.
 
 # Provision: system packages, user, dirs, systemd + nginx, venv, first start.
 sudo deploy/bootstrap.sh
@@ -77,14 +80,14 @@ sudo systemctl restart upstreamwx-api
 
 # 2. TLS (strongly recommended). certbot rewrites the nginx site in place.
 sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d upstreamwx.example.com
+sudo certbot --nginx -d upstreamwx.com
 ```
 
 Verify:
 
 ```sh
-curl -s http://127.0.0.1:8000/v1/health        # on the host
-curl -s https://upstreamwx.example.com/v1/health
+curl -s http://127.0.0.1:8000/v1/health        # on the server
+curl -s https://upstreamwx.com/v1/health
 ```
 
 `/v1/health` returns the current refresh cycle and cache size — proof the scheduler and
@@ -94,14 +97,11 @@ cache are live.
 
 ## Routine deploys (every release)
 
-The host already has everything; a deploy just moves it to a new git ref and restarts.
+The server already has everything; a deploy just moves it to a new git ref and restarts.
+SSH in and run `deploy.sh` (it lives in the checkout from the first install):
 
 ```sh
-# From your dev machine (after setting DEPLOY_SSH_HOST in deploy/config.env):
-deploy/remote-deploy.sh main          # or any branch / tag / commit SHA
-
-# …equivalently, on the host directly:
-sudo /opt/upstreamwx/deploy/deploy.sh main
+sudo /opt/upstreamwx/deploy/deploy.sh main        # or any branch / tag / commit SHA
 ```
 
 `deploy.sh` fetches the ref as the service user, refreshes the venv (`uv pip install
@@ -111,8 +111,8 @@ come up healthy exits non-zero and dumps the last 40 journal lines, so it fails 
 Roll back by deploying an older tag or SHA:
 
 ```sh
-deploy/remote-deploy.sh v0.3.1
-deploy/remote-deploy.sh 1a2b3c4
+sudo /opt/upstreamwx/deploy/deploy.sh v0.3.1
+sudo /opt/upstreamwx/deploy/deploy.sh 1a2b3c4
 ```
 
 ---
