@@ -14,7 +14,10 @@ load_config
 require_root
 
 REF="${1:-$DEPLOY_BRANCH}"
-RUN_USER="sudo -u $DEPLOY_USER"
+# -H sets HOME to the service user's home ($DEPLOY_APP_DIR); without it sudo keeps the
+# invoking user's HOME (/home/ubuntu), which the service user can't read — uv then fails
+# to open its config/cache there (Permission denied).
+RUN_USER="sudo -u $DEPLOY_USER -H"
 
 [ -d "$DEPLOY_APP_DIR/.git" ] || die "no checkout at $DEPLOY_APP_DIR — run bootstrap.sh first"
 command -v uv >/dev/null 2>&1 || die "uv not found on PATH"
