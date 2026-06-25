@@ -2,8 +2,8 @@
 project: UpstreamWX
 type: roadmap
 status: draft
-version: 0.3
-date: 2026-06-16
+version: 0.4
+date: 2026-06-25
 host: upstreamwx.com
 owner: Chris Lee
 related: UpstreamWX PRD v0.8
@@ -39,7 +39,7 @@ Build milestones M0.0–M0.5 lead up to **product v1**. The "M" prefix is delibe
 |---|---|---|
 | **M0.0** | Foundation + de-risk spikes (recommended) | Both hard-unknown spikes demonstrably work on sample data |
 | **M0.1** | Data ingest, decision engine, watershed component built and validated | Engine produces correct hazard postures on the validation corpus |
-| **M0.1.1** | SREF scheduler + persistent cache (EC2-hosted) | Recurring SREF/AFD refresh runs on schedule and caches across restarts |
+| **M0.1.1** | SREF scheduler + persistent cache (EC2-hosted) — *in progress; MVP live* | Recurring SREF/AFD refresh runs on schedule and caches across restarts |
 | **M0.2** | SITREP output as `.md` via terminal command | One command turns a mission spec into a complete, disclaimer-bearing `.md` briefing |
 | **M0.3** | API functional, passing internal validation | API returns the same briefing the CLI does, with caching/scheduling |
 | **M0.4** | PWA framework: map location in → SITREP out | A user picks a point on a map and sees a rendered SITREP |
@@ -91,13 +91,19 @@ Build milestones M0.0–M0.5 lead up to **product v1**. The "M" prefix is delibe
 
 **Objective.** Promote the on-demand SREF/watershed processing built in M0.1 to the recurring, always-on backend the PRD assumes (PRD §7, §11.2, FR-12). Hosted on the existing UpstreamWX EC2 (roadmap §M0.0 backend decision), because cadence and cross-restart persistence cannot be exercised in the ephemeral dev environment used for M0.1.
 
-**Deliverables (carried over from M0.1, not yet completed).**
-- **Scheduled SREF processor** — cron/scheduler at the SREF cadence (03/09/15/21Z), pulling promptly within NOMADS's ~2-day retention; download the CONUS field set once per cycle and aggregate every active domain from the cached grid (M0.0 resource-profile pattern).
-- **Persistent cross-restart cache** of decoded SREF grids and watershed traces (the M0.1 caches are process/disk-local and ephemeral).
-- **On-demand + scheduled refresh** wiring for active missions while the window is in range (FR-12).
-- **Smoke-test the NLDI upstream-trace fallback** (`trace_upstream_nldi`), flagged unexercised in the Spike B report.
+**Deliverables (carried over from M0.1).**
+- [x] **Always-on host stood up.** The FastAPI service is deployed on the EC2 instance behind nginx/TLS as a single systemd-managed uvicorn process (`deploy/`), serving the PWA single-origin at **upstreamwx.com**. This is the MVP now live.
+- [x] **Scheduler running unattended on the host.** The in-process cycle-aligned refresh loop (`api/scheduler.run_scheduler`) starts with the app lifespan and refreshes registered active missions on each SREF boundary (03/09/15/21Z); `/v1/health` exposes the current cycle, next cycle, cache size, and active-mission count.
+- [x] **Redeploy-durable runtime data dir.** `UPSTREAMWX_DATA_DIR` lives at `/var/lib/upstreamwx`, outside the code tree, so redeploys never clear it — the on-disk **watershed trace cache** now persists across releases (important given NOMADS's ~2-day SREF retention).
+- [x] **Bounded live-fetch latency + honest failures.** SREF/HREF downloads are latency-bounded and surface live-fetch errors rather than silently falling back to sample data (production no longer ships the sample-briefing fallback).
+- [ ] **Persistent cross-restart briefing/grid cache.** Still outstanding. `api/cache.BriefingCache` is an in-process `dict` (cycle-scoped validity, but lost on every restart/redeploy); there is no on-disk cache of **decoded SREF grids** keyed by cycle. A restart currently re-generates from scratch on the next request.
+- [ ] **Download-once-per-cycle SREF processor.** Still outstanding. `BriefingService.refresh_active` re-runs `generate_briefing` per mission, each independently re-fetching/re-decoding SREF. The M0.0 resource-profile pattern — pull the CONUS field set **once** per cycle and aggregate every active domain from the cached grid — is not yet built.
+- [ ] **Proactive cycle pull within retention.** Still outstanding. The scheduler only refreshes *already-registered* active missions on the boundary; it does not proactively pull/cache each cycle's grids independent of inbound requests.
+- [ ] **Smoke-test the NLDI upstream-trace fallback** (`trace_upstream_nldi` / pour-point NLDI), flagged unexercised in the Spike B report — confirm it on the live host.
 
-**Exit criteria.** Refresh runs unattended on the SREF/AFD cycles; a restart loses no cached cycle; the on-demand path is unchanged in output.
+**Exit criteria.** Refresh runs unattended on the SREF/AFD cycles *(met)*; a restart loses no cached cycle *(not yet — cache is in-process)*; the on-demand path is unchanged in output *(met)*.
+
+**Build status (this pass).** The always-on backend is **deployed and live at upstreamwx.com** (`deploy/` tooling: bootstrap + per-release deploy, systemd hardening, nginx/TLS, redeploy-durable data dir). The cycle-aligned scheduler runs on the host and the watershed cache persists across redeploys — so the *scheduling cadence* half of M0.1.1 is satisfied in production. The **server-side SREF *caching*** half is the active workstream: the briefing cache is still process-local, and the decoded-grid / download-once-per-cycle processor is not yet built. That is the remaining M0.1.1 work (see the outstanding list at the end of this doc).
 
 **Why split out.** Keeps M0.1's exit criterion (engine correct on the corpus) cleanly testable and met, while isolating the genuinely host-dependent scheduling/persistence work so it is not lost or forgotten.
 
@@ -180,6 +186,24 @@ Build milestones M0.0–M0.5 lead up to **product v1**. The "M" prefix is delibe
 1. **SREF processor** (M0.0 spike → M0.1 on-demand module → M0.1.1 scheduled job) — heaviest backend component; on the critical path for both flood and lightning. On-demand processing built/validated in M0.1; recurring scheduling + persistent cache deferred to M0.1.1 (EC2). The **HREF same-day supplement** (Spike C → M0.1) is *not* a separate long pole: it reuses the SREF retrieval/aggregation code (shared `grib` module), so its incremental cost is the conditional per-hour fetch loop, HREF field selection, and the lead-time-based ensemble selection in the engine.
 2. **Upstream watershed trace** (M0.0 spike → M0.1 module) — prerequisite for the entire flood model and the M0.4 map overlay.
 3. **Threshold tuning** (field testing, post-build) — Appendix B values are the accepted starting point; field testing refines them via config (FR-20a). Not on the build critical path.
+
+## Outstanding work (current focus: M0.1.1 SREF server caching)
+
+The MVP backend is live at upstreamwx.com; the remaining build work, in priority order:
+
+**M0.1.1 — finish the SREF server cache (active):**
+1. **Persistent cross-restart cache.** Back `BriefingCache` (and the decoded-grid cache below) with on-disk storage under `UPSTREAMWX_DATA_DIR` so a restart/redeploy keeps the current cycle warm instead of regenerating on the next request. The `get`/`put`-by-stable-key interface is already the right seam.
+2. **Decoded SREF-grid cache, keyed by cycle.** Cache the subset/decoded SREF (and HREF) fields per cycle so multiple missions reuse one download/decode. Foundation for #3.
+3. **Download-once-per-cycle processor.** Refactor the scheduled refresh to pull the CONUS field set once per cycle and aggregate every active domain from the cached grid (M0.0 resource-profile pattern), rather than re-fetching per mission in `refresh_active`.
+4. **Proactive cycle pull within NOMADS retention.** Have the scheduler fetch/cache each new cycle promptly on the boundary, independent of inbound requests.
+5. **Smoke-test the NLDI upstream-trace fallback** on the live host (`trace_upstream_nldi` / pour-point NLDI), still flagged unexercised.
+6. **Cache observability.** Surface hit/miss + last-cycle-pulled metrics (extend `/v1/health` or logs) so the cache can be verified in production.
+
+**M0.5 — flesh out the PWA (next milestone, not yet started):**
+- Offline cache of the latest briefing with timestamp indicator (FR-26, FR-41).
+- PDF export carrying the disclaimer (FR-27).
+- Remaining timeline polish: phase-primary hazard timeline severity color (FR-35, pending the color-mapping sign-off below), confidence hatching + label (FR-36), persistent-vs-windowed display (FR-37).
+- Forecast detail views/charts and the Resources "how this is calculated" + first-run acknowledgment (FR-20, FR-31).
 
 ## Open dependencies (from PRD, still needed)
 
