@@ -214,6 +214,15 @@ function initGlossaryInteractions() {
 // static-only deployment with no backend) fall back to the bundled sample so the PWA
 // still renders. The render layer is identical either way — both shapes are the same
 // structured contract.
+// Demo mode: the static GitHub Pages build has no API behind it, so it renders the
+// bundled sample briefing for UI review. The PRODUCTION app (served single-origin by
+// the API) must NEVER fall back to sample data — a failed fetch surfaces the real
+// error instead, so outages are visible rather than masked by a stale demo briefing.
+// Force demo locally with ?demo for offline UI work.
+const DEMO_MODE =
+  /\.github\.io$/i.test(location.hostname) ||
+  new URLSearchParams(location.search).has("demo");
+
 // POST the mission spec and return the freshly generated briefing, or throw with a
 // useful message. This is the live path; it never substitutes other data on failure.
 async function postBriefing(spec) {
@@ -222,21 +231,20 @@ async function postBriefing(spec) {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(spec),
   });
-  if (!res.ok) throw new Error(`server returned ${res.status}`);
-  state.fromCache = res.headers.get("x-from-sw-cache") === "1" || !navigator.onLine;
+  if (!res.ok) {
+    let detail = `server returned ${res.status}`;
+    try {
+      const j = await res.clone().json();
+      if (j && j.detail) detail = `${res.status}: ${typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)}`;
+    } catch (_) { /* non-JSON body (e.g. proxy 504) — keep the status */ }
+    throw new Error(detail);
+  }
+  state.fromCache = !navigator.onLine;
   return await res.json();
 }
 
-// Initial load only: try the live briefing, else fall back to the cached/sample copy
-// so the app still opens for offline review (FR-26). NOT used for edits — see refresh().
-async function loadBriefing(spec) {
-  if (spec) {
-    try {
-      return await postBriefing(spec);
-    } catch (e) {
-      // fall through to the offline sample below
-    }
-  }
+// Load the bundled sample (demo builds and ?demo only).
+async function loadSample() {
   try {
     const res = await fetch("data/sample-briefing.json", { cache: "no-store" });
     if (!res.ok) throw new Error(res.status);
@@ -252,12 +260,26 @@ async function loadBriefing(spec) {
   }
 }
 
+// Initial load. Demo builds render the sample; production fetches a live briefing and
+// surfaces the error on failure (no sample fallback) so the real state is visible.
+async function loadBriefing(spec) {
+  if (DEMO_MODE) return await loadSample();
+  return await postBriefing(spec || DEFAULT_SPEC);
+}
+
 // Re-fetch and re-render for an updated mission spec (point move / mission edit).
-// A failed live fetch must NOT silently swap in the sample briefing — that reads as
-// "the edit did nothing". Surface the failure and keep the current briefing on screen.
+// A failed live fetch must NOT silently swap in other data — that reads as "the edit
+// did nothing". Surface the failure and keep the current briefing on screen.
 async function refresh(spec) {
   persistSpec(spec);
   const status = document.getElementById("status");
+  if (DEMO_MODE) {
+    if (status) {
+      status.innerHTML =
+        `<span class="status-line__currency">Demo preview — connect the API to generate a live briefing for your edits.</span>`;
+    }
+    return;
+  }
   if (status) status.innerHTML = `<span class="status-line__currency">Updating briefing…</span>`;
   let b;
   try {
@@ -1312,7 +1334,9 @@ async function main() {
     b = await loadBriefing(savedSpec() || DEFAULT_SPEC);
   } catch (e) {
     document.getElementById("view-overview").innerHTML =
-      `<section class="card"><p class="summary">Could not load a briefing and no cached copy is available offline.</p></section>`;
+      `<section class="card"><p class="summary">Could not generate a briefing ` +
+      `(${esc(String(e.message || e))}). The briefing service may be busy or a data ` +
+      `source is unavailable — please try again shortly.</p></section>`;
     return;
   }
   renderAll(b);

@@ -87,7 +87,7 @@ tests/                   hermetic suite + committed fixtures + validation corpus
   fixtures/                committed sample data (GRIB2 subsets, GeoJSON, golden SITREP .md)
   gen_sitrep_goldens.py    regenerate golden files after an intentional render change
 frontend/                static PWA (M0.4); fetches POST /v1/briefing; STYLE_GUIDE.md is the visual source of truth
-  data/sample-briefing.json  the frozen structured contract + SW offline fallback
+  data/sample-briefing.json  the frozen structured contract; rendered ONLY in demo mode (GitHub Pages host or ?demo) — production never falls back to it
 docs/m0.0../m0.4/        per-milestone findings + spike reports — read these for "why"
 .claude/hooks/           SessionStart hook that installs deps in the web environment
 ```
