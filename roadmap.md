@@ -100,7 +100,7 @@ Build milestones M0.0–M0.5 lead up to **product v1**. The "M" prefix is delibe
 - [~] **Download-once-per-cycle SREF processor.** **In PR #39 (open).** `ingest/sref_provider._domain_max` now reads through that cache, so a cycle's CONUS subset is downloaded once and every domain aggregates from the cached grid (the M0.0 resource-profile pattern). Output unchanged; provider tests re-pointed at the cached loader.
 - [~] **Proactive cycle pull + retention pruning.** **In PR #39 (open).** `BriefingService.warm_and_prune` pre-pulls the live cycle's field set (`warm_cycle`) and prunes cycles beyond `sref_cache_keep_cycles` (default 4 ≈ NOMADS's 2-day window); the scheduler runs it each boundary *before* `refresh_active`, swallowing warm failures (NFR-6) so refresh still serves from whatever is cached.
 - [ ] **Persistent rendered-briefing cache.** Still outstanding. `api/cache.BriefingCache` is an in-process `dict` — lost on every restart/redeploy. With the SREF grids now persisted (PR #39), a restart is cheap (regenerate from cached grids), but the rendered briefing objects themselves are still ephemeral.
-- [ ] **Persistent HREF subset cache.** Still outstanding. PR #39 covers SREF only; the HREF same-day path (`href/extract.py`) still downloads into a throwaway tempdir. Same `sref/cache.py` pattern should be applied to HREF (or generalized in the shared `grib/` module).
+- [x] **Persistent HREF subset cache + multi-run spin-up backfill.** Done. The shared core is hoisted into `grib/cache.py` (atomic byte-range subset fetch + retention prune), with `sref/cache.py` re-expressed on it and a new `href/cache.py` keyed `(cycle, fhour, var, prob)`. The scheduler now warms **f06–f48** of each HREF run and keeps 3 runs (`href_cache_keep_cycles`); `ingest/href_selection.py` picks, per valid hour, the freshest cached run with fhour ≥ 6, so the current run's spin-up hours (f01–f05) are served from the previous run's mature forecast — no separate spin-up model. Provenance shows the backfill explicitly.
 - [ ] **Smoke-test the NLDI upstream-trace fallback** (`trace_upstream_nldi` / pour-point NLDI), flagged unexercised in the Spike B report — confirm it on the live host.
 - [ ] **Cache observability.** Partial. The scheduler logs the warmed-field count per cycle; `/v1/health` still reports only the in-process briefing cache size, not SREF grid-cache state (cycles on disk, last warm). Extend it so the persistent cache can be verified in production.
 
@@ -196,18 +196,17 @@ The MVP backend is live at upstreamwx.com; the remaining build work, in priority
 
 **M0.1.1 — finish the SREF server cache (active):**
 
-*In flight — **PR #39** (`claude/sref-caching-remote-server`, open, not yet merged):*
-- ✅ Persistent cross-restart **SREF-grid** cache, keyed by cycle, atomic writes (`sref/cache.py`).
-- ✅ Download-once-per-cycle processor: the provider reads through the cache; one CONUS pull serves every domain.
+*Merged — **PR #39** (SREF grid cache) and the HREF cache work (this change):*
+- ✅ Persistent cross-restart **SREF-grid** cache, keyed by cycle, atomic writes (`sref/cache.py`); shared core hoisted to `grib/cache.py`.
+- ✅ Download-once-per-cycle SREF processor: the provider reads through the cache; one CONUS pull serves every domain.
 - ✅ Proactive cycle warming + retention pruning each scheduler boundary (`warm_and_prune`, `sref_cache_keep_cycles`).
-- ✅ Hermetic tests (hit/miss, atomic-on-error, cross-restart, warm, prune, scheduler cadence) + one `network` live-warm test.
-- **Next step:** review/merge #39, then validate the warm/prune cadence on the live EC2 host (the one thing the hermetic suite can't exercise).
+- ✅ **Persistent HREF subset cache** (`href/cache.py`, keyed `(cycle, fhour, var, prob)`) with **f06–f48 warming**, 3-run retention, and **multi-run spin-up backfill** (`href_selection.py`): each valid hour reads the freshest cached run with fhour ≥ 6, so the current run's spin-up is served from the previous run's mature forecast.
+- **Next step:** validate the warm/prune cadence on the live EC2 host (the one thing the hermetic suite can't exercise).
 
-*Still outstanding after #39 merges:*
+*Still outstanding:*
 1. **Persistent rendered-briefing cache.** `api/cache.BriefingCache` is still in-process. Lower priority now that the grids persist (restart → cheap regenerate), but back it on disk if we want zero-work warm starts. The `get`/`put`-by-key interface is already the seam.
-2. **Persistent HREF subset cache.** #39 is SREF-only; apply the same cache to the HREF same-day path (`href/extract.py`), ideally generalized into the shared `grib/` module so SREF and HREF share one implementation.
-3. **Smoke-test the NLDI upstream-trace fallback** on the live host (`trace_upstream_nldi` / pour-point NLDI), still flagged unexercised since Spike B.
-4. **Cache observability.** Extend `/v1/health` (and/or logs) to surface SREF grid-cache state — cycles on disk, last warm, hit/miss — so the persistent cache is verifiable in production.
+2. **Smoke-test the NLDI upstream-trace fallback** on the live host (`trace_upstream_nldi` / pour-point NLDI), still flagged unexercised since Spike B.
+3. **Cache observability.** Extend `/v1/health` (and/or logs) to surface grid-cache state — SREF/HREF cycles on disk, last warm, hit/miss — so the persistent caches are verifiable in production.
 
 **M0.5 — flesh out the PWA (next milestone, not yet started):**
 - Offline cache of the latest briefing with timestamp indicator (FR-26, FR-41).
