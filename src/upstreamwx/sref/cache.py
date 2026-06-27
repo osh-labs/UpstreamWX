@@ -19,13 +19,16 @@ a concurrent reader sees either no file or the complete one.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
+import xarray as xr
+
 from ..config import Settings, get_settings
-from ..grib.cache import cached_subset, prune_cycle_dirs
+from ..grib.cache import cached_subset, decode_cached, prune_cycle_dirs
 from .extract import SrefField, _primary_dataarray, open_subset
 from .fetch import download_subset, fetch_idx, select_messages
-from .sources import SrefCycle
+from .sources import SREF_CYCLES, SrefCycle
 
 # The (var, prob, freq) fields the request path aggregates (see
 # :mod:`upstreamwx.ingest.sref_provider`): P(APCP>6.35 mm/3h) precip proxy and
@@ -52,6 +55,15 @@ def _cycle_dir(settings: Settings, cycle: SrefCycle) -> Path:
 def _subset_name(var: str, prob: str, freq: str) -> str:
     """Sanitized subset filename, matching the scheme in :mod:`upstreamwx.sref.extract`."""
     return f"{var}_{prob}_{freq}.grib2".replace(" ", "").replace(">", "gt").replace("<", "lt")
+
+
+def _decode(path: Path) -> xr.DataArray:
+    """Decode a cached subset to its primary DataArray, eagerly loaded into memory.
+
+    ``.load()`` materialises the grid so the cached array is decoupled from the file handle —
+    safe to share across the concurrent aggregations the orchestrator runs (roadmap §M0.1.1).
+    """
+    return _primary_dataarray(open_subset(path)).load()
 
 
 def load_probability_field_cached(
@@ -89,7 +101,7 @@ def load_probability_field_cached(
         download_subset=download_subset,
     )
 
-    da = _primary_dataarray(open_subset(path))
+    da = decode_cached(path, _decode)
     return SrefField(
         name=var,
         threshold=prob,
@@ -119,6 +131,45 @@ def warm_cycle(
         load_probability_field_cached(cycle, var, prob, freq, settings=settings).grib_path
         for var, prob, freq in fields
     ]
+
+
+def cached_cycles(
+    now: datetime | None = None,
+    *,
+    settings: Settings | None = None,
+    max_back: int = 4,
+) -> list[SrefCycle]:
+    """SREF cycles present (and non-empty) in the on-disk cache, newest-first.
+
+    Reads the ``data_dir/sref/{date}_{hh}`` dirs the scheduler has warmed so the request path
+    can resolve the freshest available cycle from disk instead of probing NOMADS on every
+    briefing (roadmap §M0.1.1, FR-7, FR-12). Skips empty/malformed dirs, any hour that is not a
+    real SREF cycle, and any cycle dated in the future relative to ``now``. Capped at
+    ``max_back`` newest. Mirrors :func:`upstreamwx.ingest.href_selection.cached_cycles`.
+    """
+    if now is None:
+        now = datetime.now(UTC)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=UTC)
+    settings = settings or get_settings()
+    root = settings.data_dir / "sref"
+    if not root.is_dir():
+        return []
+
+    cycles: list[SrefCycle] = []
+    for d in root.iterdir():
+        if not d.is_dir() or not any(d.iterdir()):
+            continue
+        try:
+            date, hh = d.name.split("_")
+            cycle = SrefCycle(date=date, hour=int(hh))
+        except (ValueError, KeyError):
+            continue
+        if cycle.hour in SREF_CYCLES and cycle.init_time <= now:
+            cycles.append(cycle)
+
+    cycles.sort(key=lambda c: c.init_time, reverse=True)
+    return cycles[:max_back]
 
 
 def prune_old_cycles(*, settings: Settings | None = None, keep: int = 4) -> list[Path]:

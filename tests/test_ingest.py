@@ -79,6 +79,95 @@ def test_nws_fetch_parses_flood_products_and_afd(monkeypatch):
     assert bundle.afd_flood_mention is True
 
 
+def test_gather_merges_all_sources_deterministically(monkeypatch):
+    # The point providers and the ensemble branch run concurrently on private bundles;
+    # gather must merge every branch's disjoint contributions in a fixed, timing-independent
+    # order (NFR-4). Stub each source to write distinct fields/notes.
+    from upstreamwx.ingest import href_provider, nws, openmeteo, spc, sref_provider
+
+    def nws_fetch(m, b):
+        b.flash_flood_warning = True
+        b.sources_ok["nws"] = True
+        b.notes.append("nws ok")
+
+    def om_fetch(m, b):
+        b.heat_index_f = 95.0
+        b.sources_ok["open_meteo"] = True
+        b.notes.append("om ok")
+
+    def spc_fetch(m, b):
+        b.spc_category = "slight"
+        b.sources_ok["spc"] = True
+        b.notes.append("spc ok")
+
+    def sref_fetch(m, b, poly, *, cycle=None):
+        b.sref_p_precip = 40.0
+        b.member_support["flash_flood"] = 0.4
+        b.sources_ok["sref"] = True
+        b.notes.append("sref ok")
+
+    def href_fetch(m, b, poly, **k):
+        b.href_p_precip = 60.0
+        b.sources_ok["href"] = True
+        b.notes.append("href ok")
+
+    monkeypatch.setattr(nws, "fetch", nws_fetch)
+    monkeypatch.setattr(openmeteo, "fetch", om_fetch)
+    monkeypatch.setattr(spc, "fetch", spc_fetch)
+    monkeypatch.setattr(sref_provider, "fetch", sref_fetch)
+    monkeypatch.setattr(href_provider, "fetch", href_fetch)
+
+    bundle = gather(_mission(), polygon=box(-112.0, 37.0, -111.9, 37.1))
+
+    # Every branch's disjoint fields survived the concurrent merge.
+    assert bundle.flash_flood_warning is True
+    assert bundle.heat_index_f == 95.0
+    assert bundle.spc_category == "slight"
+    assert bundle.sref_p_precip == 40.0
+    assert bundle.href_p_precip == 60.0
+    assert bundle.member_support == {"flash_flood": 0.4}
+    assert all(bundle.sources_ok[s] for s in ("nws", "open_meteo", "spc", "sref", "href"))
+    # Notes from every source are present, point providers ahead of the ensemble branch.
+    assert {"nws ok", "om ok", "spc ok", "sref ok", "href ok"} <= set(bundle.notes)
+    assert bundle.notes.index("nws ok") < bundle.notes.index("sref ok")
+
+    # Same inputs -> identical merged notes order regardless of thread timing (NFR-4).
+    again = gather(_mission(), polygon=box(-112.0, 37.0, -111.9, 37.1))
+    assert again.notes == bundle.notes
+
+
+def test_gather_combines_concurrent_ensembles(monkeypatch):
+    # SREF and HREF run concurrently on private bundles; gather merges member_support per-key
+    # by max (the stronger ensemble wins, §16.5) and computes the SREF<->HREF agreement after
+    # both complete (FR-17) — HREF no longer has to run after SREF to see its signal.
+    from upstreamwx.ingest import href_provider, nws, openmeteo, spc, sref_provider
+
+    monkeypatch.setattr(nws, "fetch", lambda m, b: None)
+    monkeypatch.setattr(openmeteo, "fetch", lambda m, b: None)
+    monkeypatch.setattr(spc, "fetch", lambda m, b: None)
+
+    def sref_fetch(m, b, poly, *, cycle=None):
+        b.sref_p_precip, b.sref_p_tstm = 70.0, 10.0
+        b.member_support.update({"flash_flood": 0.70, "lightning": 0.10})
+        b.sources_ok["sref"] = True
+
+    def href_fetch(m, b, poly, **k):
+        # HREF strongly diverges on precip (SREF strong, HREF near-absent) -> "partial".
+        b.href_p_precip, b.href_p_lightning = 5.0, 8.0
+        b.member_support.update({"flash_flood": 0.05, "lightning": 0.08})
+        b.sources_ok["href"] = True
+
+    monkeypatch.setattr(sref_provider, "fetch", sref_fetch)
+    monkeypatch.setattr(href_provider, "fetch", href_fetch)
+
+    bundle = gather(_mission(), polygon=box(-112.0, 37.0, -111.9, 37.1))
+
+    # Per-key max across the two ensembles, independent of which finished first.
+    assert bundle.member_support == {"flash_flood": 0.70, "lightning": 0.10}
+    # Agreement computed from both signals once joined: SREF strong vs HREF absent on precip.
+    assert bundle.source_agreement == "partial"
+
+
 def test_gather_degrades_gracefully(monkeypatch):
     # All sources raise; gather must not raise and must flag the failures (NFR-6).
     from upstreamwx.ingest import nws, openmeteo, spc, sref_provider

@@ -9,6 +9,7 @@ backend component, PRD §11.2). Pipeline:
 from .aggregate import PolygonAggregate, aggregate_over_polygon
 from .cache import (
     DEFAULT_FIELDS,
+    cached_cycles,
     load_probability_field_cached,
     prune_old_cycles,
     warm_cycle,
@@ -23,6 +24,7 @@ from .sources import (
 
 __all__ = [
     "SrefCycle",
+    "cached_cycles",
     "latest_available_cycle",
     "probe_sources",
     "IdxEntry",

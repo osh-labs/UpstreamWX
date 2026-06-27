@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -21,6 +22,7 @@ from upstreamwx.sref.cache import (
     DEFAULT_FIELDS,
     _cycle_dir,
     _subset_name,
+    cached_cycles,
     load_probability_field_cached,
     prune_old_cycles,
     warm_cycle,
@@ -158,6 +160,69 @@ def test_prune_keeps_n_newest(settings: Settings) -> None:
     remaining = sorted(p.name for p in root.iterdir())
     assert remaining == ["20260617_09", "20260617_15"]  # the two newest
     assert sorted(p.name for p in removed) == ["20260616_21", "20260617_03"]
+
+
+# --- cached_cycles: disk-based cycle resolution (no NOMADS probe) -----------
+
+def test_cached_cycles_newest_first_skips_empty_and_future(settings: Settings) -> None:
+    """Only non-empty, real, not-future cycle dirs are returned, newest-first."""
+    root = settings.data_dir / "sref"
+    # Two warmed cycles, one empty dir, one not-a-real-cycle hour, one future cycle.
+    for name, populated in (
+        ("20260617_09", True),
+        ("20260617_15", True),
+        ("20260617_03", False),   # empty -> skipped
+        ("20260617_11", True),    # hour 11 is not a SREF cycle -> skipped
+        ("20260618_21", True),    # dated after `now` below -> skipped
+    ):
+        d = root / name
+        d.mkdir(parents=True)
+        if populated:
+            (d / _subset_name(*FIELD)).write_bytes(b"x")
+
+    now = datetime(2026, 6, 17, 18, tzinfo=UTC)
+    cycles = cached_cycles(now=now, settings=settings)
+
+    assert [(c.date, c.hour) for c in cycles] == [("20260617", 15), ("20260617", 9)]
+
+
+def test_cached_cycles_empty_when_no_cache(settings: Settings) -> None:
+    """No sref cache dir yet (cold start) -> empty list, no error."""
+    assert cached_cycles(settings=settings) == []
+
+
+def test_resolve_cycle_prefers_cache_over_live_probe(settings: Settings, fixtures_dir) -> None:
+    """The provider reads the freshest warmed cycle off disk and skips the NOMADS probe."""
+    from unittest.mock import patch
+
+    from upstreamwx.ingest import sref_provider
+
+    path = _cycle_dir(settings, CYCLE) / _subset_name(*FIELD)
+    _place_fixture(path, fixtures_dir)
+
+    with patch(
+        "upstreamwx.ingest.sref_provider.latest_available_cycle",
+        side_effect=AssertionError("must not probe NOMADS when a cycle is cached"),
+    ):
+        resolved = sref_provider._resolve_cycle(None, settings=settings)
+
+    assert (resolved.date, resolved.hour) == (CYCLE.date, CYCLE.hour)
+
+
+def test_resolve_cycle_falls_back_to_live_when_cache_cold(settings: Settings) -> None:
+    """With nothing cached, resolution falls back to the live NOMADS probe (NFR-6)."""
+    from unittest.mock import patch
+
+    from upstreamwx.ingest import sref_provider
+
+    with patch(
+        "upstreamwx.ingest.sref_provider.cached_cycles", return_value=[]
+    ), patch(
+        "upstreamwx.ingest.sref_provider.latest_available_cycle", return_value=CYCLE
+    ):
+        resolved = sref_provider._resolve_cycle(None, settings=settings)
+
+    assert resolved == CYCLE
 
 
 # --- warm_and_prune + scheduler cadence (no real clock) ---------------------

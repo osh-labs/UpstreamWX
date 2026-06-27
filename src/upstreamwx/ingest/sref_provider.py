@@ -21,7 +21,12 @@ import xarray as xr
 from shapely.geometry.base import BaseGeometry
 
 from ..engine.models import Mission
-from ..sref import aggregate_over_polygon, latest_available_cycle, load_probability_field_cached
+from ..sref import (
+    aggregate_over_polygon,
+    cached_cycles,
+    latest_available_cycle,
+    load_probability_field_cached,
+)
 from .base import IngestBundle
 
 NAME = "sref"
@@ -109,9 +114,26 @@ def _domain_max(
     return agg.max_value
 
 
+def _resolve_cycle(cycle, *, settings=None):
+    """Pick the SREF cycle to read: freshest warmed-in-cache, else a live NOMADS probe.
+
+    The scheduler warms each cycle to disk (:func:`upstreamwx.api.service.warm_and_prune`), so
+    the warm request path resolves the newest cached cycle off disk and never pays the per-
+    request NOMADS availability probe — mirroring HREF (roadmap §M0.1.1, FR-7, FR-12). On a
+    cold cache (before the first scheduler tick) it falls back to the live probe, which then
+    downloads on demand. An explicit ``cycle`` override (tests, refresh) is honoured as-is.
+    """
+    if cycle is not None:
+        return cycle
+    cached = cached_cycles(settings=settings)
+    if cached:
+        return cached[0]
+    return latest_available_cycle()
+
+
 def fetch(mission: Mission, bundle: IngestBundle, polygon: BaseGeometry, *, cycle=None) -> None:
     """Populate SREF probabilities + member support over the upstream domain."""
-    cycle = cycle or latest_available_cycle()
+    cycle = _resolve_cycle(cycle)
     if cycle is None:
         bundle.sources_ok[NAME] = False
         bundle.notes.append("SREF: no available cycle on NOMADS (retention/lag).")

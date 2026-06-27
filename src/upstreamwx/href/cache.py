@@ -27,9 +27,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import requests
+import xarray as xr
 
 from ..config import Settings, get_settings
-from ..grib.cache import cached_subset, prune_cycle_dirs
+from ..grib.cache import cached_subset, decode_cached, prune_cycle_dirs
 from .extract import HrefField, _primary_dataarray, accum_window, open_subset
 from .fetch import download_subset, fetch_idx, select_messages
 from .sources import DEFAULT_DOMAIN, DEFAULT_PRODUCT, HrefCycle
@@ -87,6 +88,15 @@ def _subset_name(fhour: int, var: str, prob: str) -> str:
     )
 
 
+def _decode(path: Path) -> xr.DataArray:
+    """Decode a cached per-hour subset to its primary DataArray, eagerly loaded into memory.
+
+    ``.load()`` materialises the grid so the cached array is decoupled from the file handle —
+    safe to share across the concurrent aggregations the request path runs (roadmap §M0.1.1).
+    """
+    return _primary_dataarray(open_subset(path)).load()
+
+
 def load_probability_field_cached(
     cycle: HrefCycle,
     fhour: int,
@@ -124,7 +134,7 @@ def load_probability_field_cached(
         download_subset=download_subset,
     )
 
-    da = _primary_dataarray(open_subset(path))
+    da = decode_cached(path, _decode)
     return HrefField(
         name=var,
         threshold=prob,
