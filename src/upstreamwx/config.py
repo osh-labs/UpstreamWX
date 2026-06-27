@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # API without the recurring loop (e.g. tests, or a worker-less deployment).
     api_enable_scheduler: bool = True
 
+    # Start the watershed cache-warming pool on app startup so the mission planner can
+    # pre-delineate the upstream basin the moment coordinates change, hiding the 3-15 s
+    # cold trace behind the user's mission-entry time (FR-3). Default on for the always-on
+    # service; set UPSTREAMWX_API_ENABLE_WARM=0 for tests or a worker-less deployment.
+    api_enable_warm: bool = True
+
     # Anthropic API key for the M0.2 SITREP Haiku framing layer (FR-21). Read from the
     # standard ANTHROPIC_API_KEY name; the validation_alias bypasses the env_prefix above.
     anthropic_api_key: str | None = Field(

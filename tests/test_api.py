@@ -180,3 +180,31 @@ def test_pwa_served_at_root(client):
     assert resp.status_code == 200
     assert "text/html" in resp.headers["content-type"]
     assert "UpstreamWX" in resp.text
+
+
+def test_warm_endpoint_returns_202(client, tmp_path, monkeypatch):
+    """POST /v1/watershed/warm accepts a point and returns 202 immediately (FR-3)."""
+    from shapely.geometry import Polygon
+
+    from upstreamwx.watershed import cache as wscache
+    from upstreamwx.watershed.pourpoint import PourpointBasin
+
+    monkeypatch.setenv("UPSTREAMWX_DATA_DIR", str(tmp_path))  # keep the warm job off ./data
+
+    def fake_delineate(lat, lon):
+        poly = Polygon([(lon, lat), (lon + 0.01, lat), (lon + 0.01, lat + 0.01)])
+        return PourpointBasin(
+            lat=lat, lon=lon, snapped_lat=lat, snapped_lon=lon,
+            polygon=poly, area_km2=poly.area, method="test-fake",
+        )
+
+    monkeypatch.setattr(wscache, "delineate", fake_delineate)
+    resp = client.post("/v1/watershed/warm", json={"lat": 37.0192, "lon": -111.9889})
+    assert resp.status_code == 202
+    assert resp.json()["status"] in {"submitted", "noop"}
+
+
+def test_warm_endpoint_validates_bounds(client):
+    """Out-of-range coordinates are rejected by the request model (422)."""
+    resp = client.post("/v1/watershed/warm", json={"lat": 120.0, "lon": -111.9})
+    assert resp.status_code == 422

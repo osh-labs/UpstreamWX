@@ -66,6 +66,7 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
   sref/                  SREF ensemble processor (fetch/extract/aggregate over a polygon) — Spike A
   href/                  HREF ~3 km same-day supplement (~6-36 h), reuses grib/ — Spike C
   watershed/             HUC-12 resolution + upstream trace + pour-point delineation + on-disk cache — Spike B/D
+    cache.py               disk cache for trace/pour-point basins + single-flight registry (warm & briefing coalesce on one trace)
     roc.py                 Radius-of-Concern clip: bound the basin to a user-set disk before aggregation (FR-3)
   sitrep/                M0.2 SITREP layer + `upstreamwx` CLI
     generate.py            generate_briefing(...) — the ONE generation core the CLI and API both call
@@ -76,8 +77,8 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     sources.py             verify-against-NWS source links
     cli.py                 `upstreamwx` console entry
   api/                   M0.3 FastAPI service (`upstreamwx-api`)
-    app.py                 POST /v1/briefing, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler
-    service.py             BriefingService (cache-aware generation + active-mission refresh)
+    app.py                 POST /v1/briefing, POST /v1/watershed/warm, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler + warm pool
+    service.py             BriefingService (cache-aware generation + active-mission refresh + background watershed warming)
     cache.py               BriefingCache (keyed by location/window/activity, valid one SREF cycle)
     cycles.py              pure SREF-cycle arithmetic (03/09/15/21Z)
     scheduler.py           asyncio refresh loop
@@ -143,6 +144,7 @@ Config is `pydantic-settings` in `config.py`, env prefix `UPSTREAMWX_`, optional
 - `ANTHROPIC_API_KEY` — enables Haiku framing (read *without* the `UPSTREAMWX_`
   prefix, via a `validation_alias`). Absent → CLI emits the structured render only.
 - `UPSTREAMWX_API_ENABLE_SCHEDULER` — set `0` to run the API without the background loop.
+- `UPSTREAMWX_API_ENABLE_WARM` — set `0` to disable the background watershed-warming pool.
 
 Never commit secrets, `.env`, or anything under `data/`/`cache/`/`*.grib2` (the
 `.gitignore` already excludes these; `tests/fixtures/*.grib2` are the deliberate exception).
@@ -229,6 +231,18 @@ orange ring (`watershed.excluded_geometry` + top-level `roc` in the structured c
 persists the spec to `localStorage` (FR-10) and re-fetches. The Open-Meteo
 adapter now also persists a per-hour display series (`IngestBundle.forecast_hourly`,
 display-only — never an engine input). Verified live end-to-end in-container.
+
+**Latency follow-on (watershed warming).** Cold pour-point delineation (~3–15 s) was the
+dominant remaining briefing latency, and pre-caching whole basins is futile (every set of
+coordinates yields a slightly different watershed). Instead the planner warms it *the moment
+coordinates change*: dropping/moving/geocoding a point (or GPS/manual entry) fires a
+debounced `POST /v1/watershed/warm` (`frontend/js/app.js`), which `BriefingService.warm_watershed`
+runs on a small background `ThreadPoolExecutor` (`api_enable_warm`, default on), delineating the
+basin while the user finishes entering the mission. By the time they generate, the briefing's
+`delineate_cached(mission.lat, mission.lon)` hits the warm disk file. The quick user who
+generates mid-warm is handled by a **single-flight registry** in `watershed/cache.py`: the
+briefing *joins* the in-flight delineation instead of racing it (cache writes are atomic).
+Warming only fills a cache the briefing already used — engine output is unchanged.
 
 Deferred to **M0.1.1** (requires the always-on EC2 host; cannot be validated in an
 ephemeral container): the recurring SREF scheduler **cadence** and the
