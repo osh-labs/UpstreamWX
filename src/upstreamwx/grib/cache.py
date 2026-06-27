@@ -25,9 +25,12 @@ selection is supplied as a ``select`` closure the caller composes from its own
 from __future__ import annotations
 
 import os
+import threading
 import uuid
+from collections import OrderedDict
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 from .idx import IdxEntry
 from .idx import download_subset as _default_download_subset
@@ -74,6 +77,45 @@ def cached_subset(
         if tmp.exists():
             tmp.unlink()
     return path, selected
+
+
+# In-process LRU of decoded grids, keyed by the immutable subset file (roadmap §M0.1.1).
+# Bounds resident decoded grids; tune via the constant if memory headroom changes. SREF
+# CONUS subsets are the heavy entries (~tens of MB each); HREF per-hour subsets are small.
+_DECODE_CACHE_MAX = 48
+_decoded: OrderedDict[tuple[str, int, int], Any] = OrderedDict()
+_decoded_lock = threading.Lock()
+
+
+def decode_cached(path: Path, decode: Callable[[Path], Any]) -> Any:
+    """Return the decoded grid for a cached subset file, memoised in-process.
+
+    Without this the byte-range subset on disk is re-decoded with cfgrib on *every* cache hit
+    (eccodes parse + xarray dataset build), which dominates the warm request path once the
+    download itself is cached — and HREF reads many per-hour files per briefing (roadmap
+    §M0.1.1 decoded-grid cache). The decoded grid depends only on the immutable subset file
+    and is independent of the aggregation polygon, so we memoise it per ``(path, mtime, size)``
+    behind a bounded LRU. ``refresh`` rewrites the file with a new mtime, so it misses the memo
+    and re-decodes as intended.
+
+    Thread-safe: :mod:`upstreamwx.ingest.orchestrator` may decode for several missions
+    concurrently. The decode itself runs *outside* the lock so independent files decode in
+    parallel; a rare double-decode of the same fresh key is harmless (idempotent).
+    """
+    st = path.stat()
+    key = (str(path), st.st_mtime_ns, st.st_size)
+    with _decoded_lock:
+        hit = _decoded.get(key)
+        if hit is not None:
+            _decoded.move_to_end(key)
+            return hit
+    decoded = decode(path)
+    with _decoded_lock:
+        _decoded[key] = decoded
+        _decoded.move_to_end(key)
+        while len(_decoded) > _DECODE_CACHE_MAX:
+            _decoded.popitem(last=False)
+    return decoded
 
 
 def prune_cycle_dirs(root: Path, *, keep: int) -> list[Path]:

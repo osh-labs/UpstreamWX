@@ -12,6 +12,9 @@ This is the glue from a mission to engine-ready inputs:
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import fields
+
 from shapely.geometry.base import BaseGeometry
 
 from ..engine.models import HazardInputs, Mission
@@ -23,23 +26,37 @@ from .base import IngestBundle, to_hazard_inputs
 _POINT_PROVIDERS = (nws, openmeteo, spc)
 MANDATORY = {"nws"}
 
+# Bundle fields that accumulate from more than one source and must be *combined* on merge
+# rather than copied: provenance dicts/lists every group contributes to.
+_MERGE_DICT_FIELDS = frozenset({"sources_ok", "member_support"})
+_MERGE_LIST_FIELDS = frozenset({"notes"})
 
-def gather(
-    mission: Mission,
-    *,
-    polygon: BaseGeometry | None = None,
-    cycle=None,
-) -> IngestBundle:
-    """Gather all sources into a bundle; degrade gracefully on non-mandatory failures."""
+
+def _run_point_provider(provider, mission: Mission) -> IngestBundle:
+    """Run one point provider into its own bundle (NFR-6 degradation contained per source).
+
+    Each concurrent task owns a private bundle so the providers — which mutate the bundle in
+    place — never race on shared state; results are merged deterministically by the caller.
+    """
     bundle = IngestBundle()
+    try:
+        provider.fetch(mission, bundle)
+    except Exception as exc:  # noqa: BLE001 — degrade per NFR-6
+        bundle.sources_ok[provider.NAME] = False
+        bundle.notes.append(f"{provider.NAME}: unavailable ({type(exc).__name__}).")
+    return bundle
 
-    # Point providers (NWS, Open-Meteo, SPC).
-    for provider in _POINT_PROVIDERS:
-        try:
-            provider.fetch(mission, bundle)
-        except Exception as exc:  # noqa: BLE001 — degrade per NFR-6
-            bundle.sources_ok[provider.NAME] = False
-            bundle.notes.append(f"{provider.NAME}: unavailable ({type(exc).__name__}).")
+
+def _run_watershed_and_ensembles(
+    mission: Mission, polygon: BaseGeometry | None, cycle
+) -> IngestBundle:
+    """Delineate (+ RoC clip) the domain, then aggregate SREF and HREF over it (FR-3, FR-7/7a).
+
+    Runs as one task into its own bundle. SREF and HREF stay sequential here (HREF reads the
+    SREF signal for the cross-ensemble agreement, FR-17, and this keeps cfgrib decoding off
+    concurrent threads); the whole chain runs concurrently with the point providers above.
+    """
+    bundle = IngestBundle()
 
     # SREF over the upstream domain (needs the watershed polygon). Delineate
     # pour-point-exact (NLDI raindrop two-step) with the WBD HUC-12 trace as the
@@ -95,6 +112,63 @@ def gather(
         except Exception as exc:  # noqa: BLE001
             bundle.sources_ok[href_provider.NAME] = False
             bundle.notes.append(f"href: unavailable ({type(exc).__name__}).")
+
+    return bundle
+
+
+def _merge_into(dest: IngestBundle, src: IngestBundle) -> None:
+    """Fold a task's bundle into ``dest`` in a fixed, timing-independent order (NFR-4).
+
+    Provenance dicts/lists accumulate (every group contributes); every other field has exactly
+    one owning source, so we copy a value only when the task actually set it (differs from a
+    fresh default). Because each field has a single owner and tasks merge in a fixed order, the
+    merged bundle — and therefore the engine inputs — are identical regardless of which task
+    finished first.
+    """
+    for f in fields(IngestBundle):
+        name = f.name
+        if name in _MERGE_DICT_FIELDS:
+            getattr(dest, name).update(getattr(src, name))
+        elif name in _MERGE_LIST_FIELDS:
+            getattr(dest, name).extend(getattr(src, name))
+        else:
+            value = getattr(src, name)
+            if value != getattr(_DEFAULT_BUNDLE, name):
+                setattr(dest, name, value)
+
+
+# A pristine bundle whose field values are the "unset" baseline used by ``_merge_into``.
+_DEFAULT_BUNDLE = IngestBundle()
+
+
+def gather(
+    mission: Mission,
+    *,
+    polygon: BaseGeometry | None = None,
+    cycle=None,
+) -> IngestBundle:
+    """Gather all sources into a bundle; degrade gracefully on non-mandatory failures.
+
+    The point providers (NWS, Open-Meteo, SPC) and the watershed→SREF/HREF chain are mutually
+    independent, so they run concurrently — each on a private bundle — collapsing the briefing's
+    serial network latency to roughly the slowest single branch instead of their sum. Results
+    are merged deterministically (NFR-4); only I/O is parallelised, never the engine.
+    """
+    bundle = IngestBundle()
+
+    with ThreadPoolExecutor(max_workers=len(_POINT_PROVIDERS) + 1) as executor:
+        point_futures = [
+            executor.submit(_run_point_provider, provider, mission)
+            for provider in _POINT_PROVIDERS
+        ]
+        ensemble_future = executor.submit(
+            _run_watershed_and_ensembles, mission, polygon, cycle
+        )
+        # Merge in a fixed order (point providers, then the ensemble branch) so notes and
+        # source order do not depend on completion timing.
+        for future in point_futures:
+            _merge_into(bundle, future.result())
+        _merge_into(bundle, ensemble_future.result())
 
     failed_mandatory = [s for s in MANDATORY if bundle.sources_ok.get(s) is False]
     if failed_mandatory:
