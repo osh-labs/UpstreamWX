@@ -202,6 +202,7 @@ The MVP backend is live at upstreamwx.com; the remaining build work, in priority
 - ✅ Proactive cycle warming + retention pruning each scheduler boundary (`warm_and_prune`, `sref_cache_keep_cycles`).
 - ✅ **Persistent HREF subset cache** (`href/cache.py`, keyed `(cycle, fhour, var, prob)`) with **f06–f48 warming**, 3-run retention, and **multi-run spin-up backfill** (`href_selection.py`): each valid hour reads the freshest cached run with fhour ≥ 6, so the current run's spin-up is served from the previous run's mature forecast.
 - **Next step:** validate the warm/prune cadence on the live EC2 host (the one thing the hermetic suite can't exercise).
+- ✅ **Watershed warming (latency follow-on).** Cold pour-point delineation (~3–15 s) was the dominant remaining briefing latency. The mission planner now warms it the moment coordinates change via `POST /v1/watershed/warm` → `BriefingService.warm_watershed` (bounded background pool, `api_enable_warm`), so the basin delineates while the user enters mission times. A single-flight registry in `watershed/cache.py` coalesces a warm and the briefing that needs it onto one trace (atomic disk writes); the briefing path is unchanged and joins automatically.
 
 *Still outstanding:*
 1. **Persistent rendered-briefing cache.** `api/cache.BriefingCache` is still in-process. Lower priority now that the grids persist (restart → cheap regenerate), but back it on disk if we want zero-work warm starts. The `get`/`put`-by-key interface is already the seam.

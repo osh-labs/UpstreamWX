@@ -11,6 +11,9 @@ This is the seam between the HTTP layer and the M0.2 generation core. It:
 
 from __future__ import annotations
 
+import logging
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -20,9 +23,13 @@ from ..engine.models import Mission
 from ..sitrep.generate import GeneratedBriefing, generate_briefing
 from ..sitrep.structured import to_structured
 from ..sref import latest_available_cycle, prune_old_cycles, warm_cycle
+from ..watershed.cache import _key as watershed_key
+from ..watershed.cache import delineate_cached
 from .cache import STATIC_TOKEN, BriefingCache, mission_cache_key
 from .cycles import cycle_key
 from .models import BriefingResponse, MissionSpec
+
+logger = logging.getLogger("upstreamwx.api.service")
 
 
 @dataclass
@@ -40,6 +47,12 @@ class BriefingService:
     def __init__(self, cache: BriefingCache | None = None) -> None:
         self.cache = cache or BriefingCache()
         self._active: dict[str, _Registered] = {}
+        # Watershed warming: a bounded pool fills the pour-point cache in the background
+        # the moment the planner reports a new point, de-duped by cache key so a dragged
+        # marker can't flood it. Created in start_warming() (app lifespan), not at import.
+        self._warm_pool: ThreadPoolExecutor | None = None
+        self._warm_pending: set[str] = set()
+        self._warm_lock = threading.Lock()
 
     # -- request path ---------------------------------------------------------------
     def get_briefing(
@@ -114,6 +127,48 @@ class BriefingService:
     @property
     def active_count(self) -> int:
         return len(self._active)
+
+    # -- watershed warming ----------------------------------------------------------
+    def start_warming(self, *, max_workers: int = 2) -> None:
+        """Start the background watershed-warming pool (called from the app lifespan)."""
+        if self._warm_pool is None:
+            self._warm_pool = ThreadPoolExecutor(
+                max_workers=max_workers, thread_name_prefix="ws-warm"
+            )
+
+    def stop_warming(self) -> None:
+        """Tear the pool down without blocking shutdown on an in-flight trace."""
+        pool, self._warm_pool = self._warm_pool, None
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+
+    def warm_watershed(self, lat: float, lon: float) -> bool:
+        """Fire a background pour-point delineation for ``(lat, lon)`` (FR-3).
+
+        Returns True if a warm was submitted, False if warming is disabled or an
+        identical point is already in flight. ``radius_km`` is intentionally not a
+        parameter: delineation depends only on the pour point, and the Radius-of-Concern
+        clip is cheap post-processing the briefing applies later.
+        """
+        if self._warm_pool is None:
+            return False
+        key = watershed_key(lat, lon)
+        with self._warm_lock:
+            if key in self._warm_pending:
+                return False
+            self._warm_pending.add(key)
+        self._warm_pool.submit(self._warm_job, lat, lon, key)
+        return True
+
+    def _warm_job(self, lat: float, lon: float, key: str) -> None:
+        try:
+            delineate_cached(lat, lon)  # populates the disk cache; joins single-flight
+        except Exception:
+            # Best-effort: a failed warm just means the briefing pays the cold cost (NFR-6).
+            logger.exception("watershed warm failed for %s", key)
+        finally:
+            with self._warm_lock:
+                self._warm_pending.discard(key)
 
     # -- helpers --------------------------------------------------------------------
     def _response(

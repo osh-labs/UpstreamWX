@@ -27,7 +27,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..config import get_settings
 from .cycles import cycle_key, next_cycle
-from .models import BriefingResponse, MissionSpec
+from .models import BriefingResponse, MissionSpec, WatershedWarmRequest
 from .scheduler import run_scheduler
 from .service import BriefingService
 
@@ -43,12 +43,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the cycle-aligned refresh scheduler for the app's lifetime (FR-12)."""
     task: asyncio.Task | None = None
     stop = asyncio.Event()
-    if get_settings().api_enable_scheduler:
+    settings = get_settings()
+    if settings.api_enable_scheduler:
         task = asyncio.create_task(run_scheduler(service, stop=stop))
         logger.info("briefing refresh scheduler started")
+    if settings.api_enable_warm:
+        service.start_warming()
+        logger.info("watershed warm pool started")
     try:
         yield
     finally:
+        service.stop_warming()
         if task is not None:
             stop.set()
             task.cancel()
@@ -87,6 +92,18 @@ def briefing(spec: MissionSpec) -> BriefingResponse:
     erroring.
     """
     return service.get_briefing(spec)
+
+
+@app.post("/v1/watershed/warm", status_code=202)
+def warm_watershed(req: WatershedWarmRequest) -> dict:
+    """Pre-warm the pour-point watershed cache for a point (FR-3).
+
+    Fire-and-forget: the planner calls this the moment coordinates change so the upstream
+    basin delineates in the background while the user enters mission times. Returns 202
+    immediately; the next briefing for the same point then skips the cold 3-15 s trace.
+    """
+    submitted = service.warm_watershed(req.lat, req.lon)
+    return {"status": "submitted" if submitted else "noop"}
 
 
 def _frontend_dir() -> Path | None:

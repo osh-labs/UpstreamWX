@@ -74,6 +74,20 @@ class MissionSpec(BaseModel):
         return HazardInputs(**data)
 
 
+class WatershedWarmRequest(BaseModel):
+    """A request to pre-warm the pour-point watershed cache for a point (FR-3).
+
+    Sent by the mission planner the moment coordinates change so the upstream basin is
+    delineated in the background while the user finishes entering the mission. Only the
+    point matters: ``radius_km`` is accepted for symmetry with :class:`MissionSpec` but is
+    ignored, since the Radius-of-Concern clip runs after delineation.
+    """
+
+    lat: float = Field(ge=-90, le=90)
+    lon: float = Field(ge=-180, le=180)
+    radius_km: float | None = Field(default=None, ge=1, description="ignored for delineation")
+
+
 class BriefingResponse(BaseModel):
     """A generated (or cached) briefing and its provenance.
 

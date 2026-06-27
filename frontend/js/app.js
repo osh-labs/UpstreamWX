@@ -30,6 +30,7 @@ let state = { briefing: null, fromCache: false, tab: "overview", mapInitialized:
  * briefing whenever the point or mission details change (M0.4). The spec
  * mirrors the API's MissionSpec. */
 const API_BRIEFING = "/v1/briefing";
+const API_WATERSHED_WARM = "/v1/watershed/warm";
 const MISSION_KEY = "uwx.mission.v1";
 // Seed mission used on first run when nothing is saved (a real CONUS point).
 // Radius of Concern (FR-3): discrete, non-linear slider stops in miles; the data
@@ -264,6 +265,31 @@ async function postBriefing(spec) {
   }
   state.fromCache = !navigator.onLine;
   return await res.json();
+}
+
+// Fire-and-forget watershed cache warm: kick off the slow upstream delineation the moment
+// the planner reports a new point, so it's ready (or in flight) by the time the user
+// generates the briefing. Best-effort — a failed or disabled warm just means the briefing
+// pays the cold cost as before, so errors are swallowed and never surface in the UI.
+function warmWatershed(lat, lon) {
+  if (DEMO_MODE) return; // no live API behind a static build
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
+  fetch(API_WATERSHED_WARM, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ lat, lon }),
+    keepalive: true,
+  }).catch(() => {});
+}
+
+let _warmTimer = null;
+// Debounce so dragging the marker or a search→place→reseed burst fires one warm, not many.
+function warmWatershedDebounced(lat, lon) {
+  if (_warmTimer) clearTimeout(_warmTimer);
+  _warmTimer = setTimeout(() => {
+    _warmTimer = null;
+    warmWatershed(lat, lon);
+  }, 350);
 }
 
 // Load the bundled sample (demo builds and ?demo only).
@@ -1309,6 +1335,7 @@ function placeOrMoveMarker(latlng) {
   if (!_mpMap) return;
   _mpSpec.lat = latlng.lat;
   _mpSpec.lon = latlng.lng;
+  warmWatershedDebounced(latlng.lat, latlng.lng); // pre-warm the basin while the user keeps planning
   drawPlannerRoc();
   if (_mpMarker) {
     _mpMarker.setLatLng(latlng);
@@ -1322,6 +1349,7 @@ function placeOrMoveMarker(latlng) {
       const ll = _mpMarker.getLatLng();
       _mpSpec.lat = ll.lat;
       _mpSpec.lon = ll.lng;
+      warmWatershedDebounced(ll.lat, ll.lng); // pre-warm after a drag
       drawPlannerRoc();
     });
   }

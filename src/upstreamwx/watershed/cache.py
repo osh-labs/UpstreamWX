@@ -12,7 +12,11 @@ cross-restart cache the scheduler relies on is an M0.1.1 / EC2 concern.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 import time
+from concurrent.futures import Future
 from pathlib import Path
 
 from shapely.geometry import mapping, shape
@@ -35,6 +39,26 @@ def _cache_dir(settings: Settings) -> Path:
 
 def _key(lat: float, lon: float) -> str:
     return f"{round(lat, _KEY_PRECISION)}_{round(lon, _KEY_PRECISION)}"
+
+
+def _atomic_write(path: Path, text: str) -> None:
+    """Write ``text`` to ``path`` atomically so a concurrent reader never sees a
+    half-written file (NFR-6). Watershed warming may delineate the same basin while a
+    briefing reads/writes it; an os.replace of a temp file makes the swap indivisible.
+    """
+    # A unique temp name (not a fixed ".tmp" suffix) so two concurrent writers to the same
+    # key — e.g. a refresh racing the single-flight owner — never clobber each other's temp.
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            fh.write(text)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _to_feature(trace: UpstreamTrace) -> dict:
@@ -93,13 +117,22 @@ def resolve_and_trace_cached(
         return _from_feature(json.loads(path.read_text()))
 
     trace = _resolve_and_trace(lat, lon)
-    path.write_text(json.dumps(_to_feature(trace)))
+    _atomic_write(path, json.dumps(_to_feature(trace)))
     return trace
 
 
 # --------------------------------------------------------------------------- #
 # Pour-point basin cache (NLDI raindrop two-step, with WBD fallback).
 # --------------------------------------------------------------------------- #
+# Single-flight registry: at most one live delineation per cache key. A briefing that
+# arrives while a planner-triggered warm is still tracing the same point joins the
+# in-flight Future instead of starting a duplicate 3-15 s NLDI/USGS trace. This is what
+# makes "warm the cache the moment coordinates are entered" safe for the quick user who
+# generates before the warm finishes.
+_inflight_lock = threading.Lock()
+_inflight: dict[str, Future[PourpointBasin]] = {}
+
+
 def _pourpoint_dir(settings: Settings) -> Path:
     d = settings.data_dir / "watershed" / "pourpoint"
     d.mkdir(parents=True, exist_ok=True)
@@ -147,13 +180,48 @@ def delineate_cached(
     settings: Settings | None = None,
     refresh: bool = False,
 ) -> PourpointBasin:
-    """Return the pour-point basin for a point, using the on-disk cache when present."""
-    settings = settings or get_settings()
-    path = _pourpoint_dir(settings) / f"{_key(lat, lon)}.geojson"
+    """Return the pour-point basin for a point, using the on-disk cache when present.
 
+    Concurrent callers for the same point (e.g. a background warm and the briefing that
+    needs it) are coalesced: the first becomes the owner and runs the live delineation;
+    the rest wait on its result. ``refresh=True`` always starts a fresh trace rather than
+    joining an in-flight one.
+    """
+    settings = settings or get_settings()
+    key = _key(lat, lon)
+    path = _pourpoint_dir(settings) / f"{key}.geojson"
+
+    # Fast path: a warm disk file. Lock-free — read-only.
     if path.is_file() and not refresh:
         return _basin_from_feature(json.loads(path.read_text()))
 
-    basin = delineate(lat, lon)
-    path.write_text(json.dumps(_basin_to_feature(basin)))
-    return basin
+    # Decide owner vs waiter under the registry lock.
+    with _inflight_lock:
+        # Re-check the disk inside the lock: the owner may have finished and written the
+        # file between our fast-path check above and acquiring the lock.
+        if path.is_file() and not refresh:
+            return _basin_from_feature(json.loads(path.read_text()))
+        existing = _inflight.get(key)
+        if existing is not None and not refresh:
+            fut, owner = existing, False
+        else:
+            fut, owner = Future(), True
+            _inflight[key] = fut
+
+    if not owner:
+        return fut.result()  # blocks; re-raises the owner's exception if it failed
+
+    # The slow trace runs outside the lock so waiters never block the registry.
+    try:
+        basin = delineate(lat, lon)
+        _atomic_write(path, json.dumps(_basin_to_feature(basin)))
+        fut.set_result(basin)
+        return basin
+    except BaseException as exc:
+        fut.set_exception(exc)
+        raise
+    finally:
+        with _inflight_lock:
+            # Identity check: a concurrent refresh may have replaced our entry.
+            if _inflight.get(key) is fut:
+                del _inflight[key]
