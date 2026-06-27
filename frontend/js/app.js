@@ -959,35 +959,178 @@ function poiPopupHtml(m) {
   </div>`;
 }
 
-// MapLibre vector tile base styles — OpenFreeMap (free, no API key, OSM-based, attribution required).
-const STYLE_TOPO  = "https://tiles.openfreemap.org/styles/liberty";   // detailed topo — default
-const STYLE_LIGHT = "https://tiles.openfreemap.org/styles/positron";  // minimal light
+// ── Base map styles ────────────────────────────────────────────────────
+// All sources are free and key-free. "Light" is OpenFreeMap's minimal light vector
+// style; "Aerial" is Esri World Imagery raster; "WX Topo" is built below.
+const STYLE_LIGHT = "https://tiles.openfreemap.org/styles/positron";  // OpenFreeMap minimal light
+const STYLE_FIORD = "https://tiles.openfreemap.org/styles/fiord";    // OpenFreeMap fiord (muted dark)
 
-// Raster source configs for Esri providers (free, attribution required).
-// maxzoom = native tile ceiling; MapLibre auto-upscales above this without blank tiles.
+// Esri World Imagery (satellite) — kept as the imagery base. maxzoom = native tile
+// ceiling; MapLibre auto-upscales above this without blank tiles.
 const RASTER_AERIAL = {
   type: "raster",
   tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
   tileSize: 256, maxzoom: 19,
   attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics",
 };
-const RASTER_ESRI_TOPO = {
-  type: "raster",
-  tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}"],
-  tileSize: 256, maxzoom: 17,
-  attribution: "Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, USGS, NPS",
-};
-const RASTER_STREET = {
-  type: "raster",
-  tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}"],
-  tileSize: 256, maxzoom: 17,
-  attribution: "Tiles &copy; Esri &mdash; Esri, HERE, Garmin",
-};
 
-// Minimal MapLibre style document wrapping a single raster source — used when the user
-// picks a raster base (Aerial, Esri Topo, Street) from the layer switcher.
+// Minimal MapLibre style document wrapping a single raster source (used for Aerial).
 function rasterBaseStyle(src) {
   return { version: 8, sources: { base: src }, layers: [{ id: "base", type: "raster", source: "base" }] };
+}
+
+// ── WX Topo: key-free dark/light topographic base ──────────────────────
+// Hill shading comes from the AWS Terrarium DEM (decoded natively by MapLibre as a
+// raster-dem source); contour lines are generated client-side by maplibre-contour from
+// the same DEM; water, roads, and labels are OpenFreeMap's OpenMapTiles vector tiles.
+// The builder is theme-parameterized so the same recipe yields the dark default and a
+// future light variant — call buildWxTopoStyle({ dark: false }) for light.
+const OFM_VECTOR_URL = "https://tiles.openfreemap.org/planet";              // OpenMapTiles vector tiles
+const OFM_GLYPHS     = "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf";
+const TERRARIUM_URL  = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const OFM_ATTRIB     = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> · <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">© OpenMapTiles</a> · <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">© OpenStreetMap</a>';
+const TERRAIN_ATTRIB = '<a href="https://github.com/tilezen/joerd/blob/master/docs/attribution.md" target="_blank" rel="noopener">Terrain: Mapzen / AWS</a>';
+
+const WX_TOPO_DARK = {
+  bg: "#0a0e14", land: "#0f1620", water: "#15384f",
+  shadow: "#04070b", highlight: "#3a4a5a", accent: "#10204a",
+  contour: "#5d6b4e", contourIndex: "#8d9a6b", contourLabel: "#b3c08f",
+  road: "#3a4654", roadMinor: "#28313d", label: "#cdd6e0",
+};
+const WX_TOPO_LIGHT = {
+  bg: "#f3efe6", land: "#e8e3d5", water: "#a9cce0",
+  shadow: "#9a978a", highlight: "#ffffff", accent: "#cfe6f2",
+  contour: "#b6a079", contourIndex: "#8c7548", contourLabel: "#6a5836",
+  road: "#cdbfa9", roadMinor: "#ded3bf", label: "#33302a",
+};
+
+// Lazily create the shared DEM source for hillshade + contours (one custom protocol per
+// maplibregl instance). Returns null if maplibre-contour failed to load — callers then
+// fall back to native hillshade with no contour lines.
+let _demSource = null;
+function getDemSource() {
+  if (_demSource) return _demSource;
+  if (!window.mlcontour || !window.maplibregl) return null;
+  _demSource = new mlcontour.DemSource({
+    url: TERRARIUM_URL, encoding: "terrarium", maxzoom: 13, worker: true,
+  });
+  _demSource.setupMaplibre(maplibregl);
+  return _demSource;
+}
+
+// Build a complete MapLibre style for the WX Topo base. dark selects the palette.
+function buildWxTopoStyle({ dark = true } = {}) {
+  const P = dark ? WX_TOPO_DARK : WX_TOPO_LIGHT;
+  const dem = getDemSource();
+
+  const sources = {
+    openmaptiles: { type: "vector", url: OFM_VECTOR_URL, attribution: OFM_ATTRIB },
+    // Shared DEM through maplibre-contour's protocol when available (one fetch feeds both
+    // hillshade and contours); otherwise native terrarium tiles for hillshade only.
+    dem: dem
+      ? { type: "raster-dem", encoding: "terrarium", tileSize: 514, maxzoom: 13,
+          tiles: [dem.sharedDemProtocolUrl], attribution: TERRAIN_ATTRIB }
+      : { type: "raster-dem", encoding: "terrarium", tileSize: 256, maxzoom: 15,
+          tiles: [TERRARIUM_URL], attribution: TERRAIN_ATTRIB },
+  };
+  if (dem) {
+    sources.contours = {
+      type: "vector", maxzoom: 15,
+      tiles: [dem.contourProtocolUrl({
+        multiplier: 3.28084,        // metres → feet (US contour convention)
+        overzoom: 1,
+        thresholds: {               // per-zoom [minor interval, index interval] in feet
+          10: [1000, 5000], 11: [500, 2500], 12: [400, 2000],
+          13: [200, 1000], 14: [100, 500], 15: [40, 200],
+        },
+        elevationKey: "ele", levelKey: "level", contourLayer: "contours",
+      })],
+    };
+  }
+
+  const layers = [
+    { id: "bg", type: "background", paint: { "background-color": P.bg } },
+    { id: "landcover", type: "fill", source: "openmaptiles", "source-layer": "landcover",
+      paint: { "fill-color": P.land, "fill-opacity": 0.5 } },
+    { id: "hillshade", type: "hillshade", source: "dem",
+      paint: {
+        "hillshade-exaggeration": 0.45,
+        "hillshade-shadow-color": P.shadow,
+        "hillshade-highlight-color": P.highlight,
+        "hillshade-accent-color": P.accent,
+        "hillshade-illumination-direction": 315,
+      } },
+    { id: "water", type: "fill", source: "openmaptiles", "source-layer": "water",
+      paint: { "fill-color": P.water, "fill-opacity": 0.85 } },
+    { id: "waterway", type: "line", source: "openmaptiles", "source-layer": "waterway",
+      paint: { "line-color": P.water,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.4, 14, 1.4] } },
+  ];
+
+  if (dem) {
+    layers.push(
+      { id: "contour", type: "line", source: "contours", "source-layer": "contours",
+        filter: ["!=", ["get", "level"], 1],
+        paint: { "line-color": P.contour, "line-width": 0.5, "line-opacity": 0.5 } },
+      { id: "contour-index", type: "line", source: "contours", "source-layer": "contours",
+        filter: ["==", ["get", "level"], 1],
+        paint: { "line-color": P.contourIndex, "line-width": 1, "line-opacity": 0.75 } },
+    );
+  }
+
+  layers.push(
+    { id: "road-minor", type: "line", source: "openmaptiles", "source-layer": "transportation",
+      filter: ["!", ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary"]]]],
+      minzoom: 11,
+      paint: { "line-color": P.roadMinor,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 11, 0.4, 16, 2] } },
+    { id: "road-major", type: "line", source: "openmaptiles", "source-layer": "transportation",
+      filter: ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary"]]],
+      paint: { "line-color": P.road,
+        "line-width": ["interpolate", ["linear"], ["zoom"], 7, 0.6, 16, 3] } },
+  );
+
+  if (dem) {
+    layers.push({
+      id: "contour-label", type: "symbol", source: "contours", "source-layer": "contours",
+      filter: ["==", ["get", "level"], 1], minzoom: 12,
+      layout: {
+        "symbol-placement": "line", "symbol-spacing": 320,
+        "text-field": ["concat", ["number-format", ["get", "ele"], { "max-fraction-digits": 0 }], " ft"],
+        "text-font": ["Noto Sans Regular"], "text-size": 10, "text-rotation-alignment": "map",
+      },
+      paint: { "text-color": P.contourLabel, "text-halo-color": P.bg, "text-halo-width": 1.4 },
+    });
+  }
+
+  layers.push({
+    id: "place", type: "symbol", source: "openmaptiles", "source-layer": "place",
+    filter: ["match", ["get", "class"], ["city", "town", "village"], true, false],
+    layout: {
+      "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]],
+      "text-font": ["Noto Sans Regular"],
+      "text-size": ["interpolate", ["linear"], ["zoom"], 6, 11, 12, 15],
+    },
+    paint: { "text-color": P.label, "text-halo-color": P.bg, "text-halo-width": 1.4 },
+  });
+
+  return { version: 8, glyphs: OFM_GLYPHS, sources, layers };
+}
+
+// Layer-switcher entries shared by the briefing and planner maps.
+const BASE_LAYERS = [
+  { label: "WX Topo", key: "wxtopo" },
+  { label: "Fiord", key: "fiord" },
+  { label: "Light", key: "light" },
+  { label: "Aerial", key: "aerial" },
+];
+
+// Resolve a switcher key to a MapLibre style (URL, raster style object, or built style).
+function baseStyleForKey(key) {
+  if (key === "fiord") return STYLE_FIORD;
+  if (key === "light") return STYLE_LIGHT;
+  if (key === "aerial") return rasterBaseStyle(RASTER_AERIAL);
+  return buildWxTopoStyle({ dark: true });   // "wxtopo" — default base
 }
 
 // Approximate circle as a GeoJSON Polygon (equirectangular; ≤1 % error at CONUS latitudes
@@ -1148,7 +1291,7 @@ function initMainMap(b) {
 
   const m = b.mission;
   _mainMap = new maplibregl.Map({
-    container, style: STYLE_TOPO,
+    container, style: baseStyleForKey("wxtopo"),
     center: [m.lon, m.lat], zoom: 13, maxZoom: 19,
     attributionControl: true,
   });
@@ -1220,19 +1363,9 @@ function initMainMap(b) {
         .addTo(_mainMap);
     });
 
-    const MAIN_LAYERS = [
-      { label: "Topo", key: "topo" },
-      { label: "Light", key: "light" },
-      { label: "Aerial", key: "aerial" },
-      { label: "Esri Topo", key: "esritopo" },
-      { label: "Street", key: "street" },
-    ];
-    const STYLE_MAP  = { topo: STYLE_TOPO, light: STYLE_LIGHT };
-    const RASTER_MAP = { aerial: RASTER_AERIAL, esritopo: RASTER_ESRI_TOPO, street: RASTER_STREET };
     _mainMap.addControl(
-      makeLayerSwitcherControl(MAIN_LAYERS, (key) => {
-        if (STYLE_MAP[key]) _mainMap.setStyle(STYLE_MAP[key]);
-        else _mainMap.setStyle(rasterBaseStyle(RASTER_MAP[key]));
+      makeLayerSwitcherControl(BASE_LAYERS, (key) => {
+        _mainMap.setStyle(baseStyleForKey(key));
         _mainMap.once("style.load", () => {
           if (state.briefing) applyBriefingLayers(_mainMap, state.briefing);
         });
@@ -1654,23 +1787,9 @@ function initPlannerLongPress(container) {
   });
 }
 
-// Layer options available in the planner map switcher.
-const PLANNER_LAYERS = [
-  { label: "Topo", key: "topo" },
-  { label: "Light", key: "light" },
-  { label: "Aerial", key: "aerial" },
-  { label: "Esri Topo", key: "esri-topo" },
-  { label: "Street", key: "street" },
-];
-
 function onPlannerLayerSwitch(key) {
   if (!_mpMap) return;
-  const style = key === "aerial" ? rasterBaseStyle(RASTER_AERIAL)
-    : key === "esri-topo" ? rasterBaseStyle(RASTER_ESRI_TOPO)
-    : key === "street" ? rasterBaseStyle(RASTER_STREET)
-    : key === "light" ? STYLE_LIGHT
-    : STYLE_TOPO;
-  _mpMap.setStyle(style);
+  _mpMap.setStyle(baseStyleForKey(key));
   _mpMap.once("style.load", () => {
     initPlannerRocLayer();
     updatePlannerRoc();
@@ -1692,7 +1811,7 @@ function initPlannerMap() {
   }
 
   _mpMap = new maplibregl.Map({
-    container, style: STYLE_TOPO,
+    container, style: baseStyleForKey("wxtopo"),
     center, zoom, maxZoom: 19,
     attributionControl: true,
   });
@@ -1705,7 +1824,7 @@ function initPlannerMap() {
   });
 
   initPlannerLongPress(container);
-  _mpMap.addControl(makeLayerSwitcherControl(PLANNER_LAYERS, onPlannerLayerSwitch), "top-right");
+  _mpMap.addControl(makeLayerSwitcherControl(BASE_LAYERS, onPlannerLayerSwitch), "top-right");
 }
 
 // Open the planner over a starting spec (the saved/current mission, or a seed).
