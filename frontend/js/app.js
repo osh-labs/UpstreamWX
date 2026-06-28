@@ -1419,8 +1419,10 @@ function _inlineFormat(text) {
     if (tok.t === "link") {
       return `<a href="${esc(tok.url)}" target="_blank" rel="noopener noreferrer">${esc(tok.label)}</a>`;
     }
-    // Escape HTML then apply **bold**.
-    return esc(tok.v).replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    // Escape HTML then apply **bold** and _italic_.
+    return esc(tok.v)
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/_((?:[^_])+)_/g, "<em>$1</em>");
   }).join("");
 }
 
