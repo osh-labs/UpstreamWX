@@ -180,17 +180,29 @@ const GLOSSARY = [
   ["HUC", "Hydrologic Unit Code", "A USGS nested watershed identifier. Smaller units (more digits) mean a finer drainage area."],
   ["QPF", "Quantitative Precipitation Forecast", "Forecast precipitation amount (e.g. inches) over a given period."],
   ["NEP", "Neighborhood Ensemble Probability", "The probability an event occurs within a neighborhood of a point across the ensemble members."],
+  ["CAPE", "Convective Available Potential Energy", "A measure of atmospheric instability (J/kg). Higher CAPE means more energy available for storm development; used to modulate lightning confidence, not to set the tier directly."],
+  ["P(tstm)", "Probability of Thunderstorms", "The SREF ensemble probability that at least one member produces a thunderstorm over the aggregation domain. The primary lightning tier driver beyond the same-day window."],
+  ["P(precip)", "Probability of Precipitation", "The SREF ensemble probability of measurable precipitation over the upstream watershed. A primary input to the flash flood tier."],
+  ["P(ltg)", "Probability of Lightning", "The HREF same-day probability of a lightning strike within the aggregation domain (~6–36 h window). Sharpens the lightning tier when HREF is in range."],
+  ["RoC", "Radius of Concern", "The user-configured maximum distance from the expedition point used to clip the upstream watershed before SREF/HREF aggregation. Smaller values focus the weather domain on the immediate drainage area."],
+  ["LAoC", "Lightning Area of Concern", "The disk around the expedition point over which SREF and HREF lightning probabilities are aggregated. Lightning uses a disk, not the upstream watershed, because it is a point/corridor hazard (PRD §16.1)."],
 ];
 
 const GLOSSARY_MAP = new Map(GLOSSARY.map(([acr, term, def]) => [acr, { term, def }]));
 // Single alternation, longest acronym first so "HUC-12" wins over "HUC".
+// Per-alternative \b: terms ending in a non-word char (e.g. "P(tstm)") use (?!\w)
+// instead of \b on the right — \b after ")" is never a word boundary.
 const GLOSSARY_RE = new RegExp(
-  "\\b(" +
+  "(" +
     GLOSSARY.map(([a]) => a)
       .sort((a, b) => b.length - a.length)
-      .map((a) => a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+      .map((a) => {
+        const escaped = a.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const post = /\w$/.test(a) ? "\\b" : "(?!\\w)";
+        return "\\b" + escaped + post;
+      })
       .join("|") +
-    ")\\b",
+    ")",
   "g"
 );
 
