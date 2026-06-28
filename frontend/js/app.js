@@ -1684,6 +1684,10 @@ const ABOUT_THRESHOLDS = [
   ], "Bands are intentionally warmer than dry-cold thresholds because wet clothing loses most of its insulation. A dry cave with no immersion may be discounted by roughly one tier."],
 ];
 
+// Stripe-hosted donation page (FR: free, donation-supported). Opened in a new tab.
+const DONATE_URL = "https://donate.stripe.com/3cIbIT75o6Jxept4aw4c800";
+const CONTACT_EMAIL = "info@southeastexpeditionmed.com";
+
 function renderAbout(b) {
   const sources = ABOUT_SOURCES.map(
     ([name, access, desc, ic]) => `<div class="about-source">
@@ -1711,45 +1715,92 @@ function renderAbout(b) {
 
   document.getElementById("view-about").innerHTML = `
     <button class="about-back" id="close-about">${icon("arrow_left", "about-back__icon")}Resources</button>
-    <h1 class="about-title">About &amp; Methodology</h1>
+    <h1 class="about-title">About UpstreamWX</h1>
     <p class="about-lede">UpstreamWX is a planning-reference briefing for caving and canyoneering. It gathers official and modeled weather, assesses four life-safety hazards (flash flooding, lightning, heat, and cold/wet hypothermia), and shows the reasoning. It never tells you whether to go.</p>
+
+    <section class="card">
+      <div class="eyebrow">Who makes UpstreamWX</div>
+      <p class="about-p">UpstreamWX is built and maintained by Southeast Expedition Medical, a small team of cavers and wilderness medicine practitioners. We built the briefing tool we wanted for our own trips: one place that pulls the official forecast, the ensemble models, and the upstream watershed together, and shows the reasoning behind the risk assessment. It is free, has no ads, and asks for no personal data.</p>
+      <a class="about-contact" href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>
+    </section>
+
+    <section class="card about-support">
+      <div class="eyebrow">Support UpstreamWX</div>
+      <p class="about-p">Running UpstreamWX has real costs: the servers that process the SREF and HREF ensembles, the map and watershed data, and the time to keep the app up to date. It stays free because people who find it useful chip in. If it saved you time planning a trip, a donation helps keep it online for the next expedition.</p>
+      <a class="about-donate" href="${DONATE_URL}" target="_blank" rel="noopener noreferrer">${icon("external", "about-donate__icon")}Donate</a>
+      <p class="about-support__note">Secure checkout handled by Stripe. Give once or monthly, any amount.</p>
+    </section>
+
+    <div class="about-section-head">How this is calculated</div>
     <p class="about-p">The hazard posture labels (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(", ")}) follow standard risk-management terminology. As outdoor adventurers, our internal risk assessment is calibrated differently than most, so a posture like "${displayTier("High")}" or "${displayTier("Extreme")}" may read as stronger than you expect. Treat it as a prompt to look closer, not as a verdict. Our hazard postures are a measurement of assessed risk, not whether that risk can be mitigated.</p>
 
-    <section class="card">
-      <div class="eyebrow">The deterministic engine</div>
-      <p class="about-p">Every hazard posture, confidence level, and window of concern is decided by a deterministic, documented rule engine. Identical inputs always produce an identical result. The language model used for summary generation only frames the wording of the summary. It can never compute, raise, or lower a posture.</p>
-      <ul class="about-list">
-        <li>Four hazards are scored independently on a common scale (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(", ")}).</li>
-        <li>Each hazard applies only in the expedition phases where it is relevant (approach, technical span, egress) and per activity type. A cave technical span is treated as isolated from surface weather and shows flash flood only.</li>
-        <li>The overall expedition posture is the maximum across all applicable hazards, and every hazard stays visible, so a high lightning posture on approach is never hidden behind a low flood posture.</li>
-        <li>A confidence qualifier per hazard comes from SREF ensemble agreement and cross-source consistency, including SREF and HREF agreement on same-day windows.</li>
-      </ul>
-    </section>
+    <details class="card about-fold">
+      <summary class="about-fold__summary">
+        <span class="about-fold__head">
+          <span class="eyebrow">The deterministic engine</span>
+          <span class="about-fold__teaser">Why identical inputs always produce an identical posture, and what the summary writer can and cannot do.</span>
+        </span>
+        ${icon("chevron", "about-fold__chev")}
+      </summary>
+      <div class="about-fold__body">
+        <p class="about-p">Every hazard posture, confidence level, and window of concern is decided by a deterministic, documented rule engine. Identical inputs always produce an identical result. The language model used for summary generation only frames the wording of the summary. It can never compute, raise, or lower a posture.</p>
+        <ul class="about-list">
+          <li>Four hazards are scored independently on a common scale (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(", ")}).</li>
+          <li>Each hazard applies only in the expedition phases where it is relevant (approach, technical span, egress) and per activity type. A cave technical span is treated as isolated from surface weather and shows flash flood only.</li>
+          <li>The overall expedition posture is the maximum across all applicable hazards, and every hazard stays visible, so a high lightning posture on approach is never hidden behind a low flood posture.</li>
+          <li>A confidence qualifier per hazard comes from SREF ensemble agreement and cross-source consistency, including SREF and HREF agreement on same-day windows.</li>
+        </ul>
+      </div>
+    </details>
 
-    <section class="card">
-      <div class="eyebrow">Data sourcing</div>
-      <p class="about-p">Providers sit behind a common interface, so the engine never depends on a specific source. If a non-mandatory source is unavailable the briefing still renders, marking that input as unavailable.</p>
-      <div class="about-sources">${sources}</div>
-    </section>
+    <details class="card about-fold">
+      <summary class="about-fold__summary">
+        <span class="about-fold__head">
+          <span class="eyebrow">Data sourcing</span>
+          <span class="about-fold__teaser">The official and modeled weather sources behind each hazard.</span>
+        </span>
+        ${icon("chevron", "about-fold__chev")}
+      </summary>
+      <div class="about-fold__body">
+        <p class="about-p">Providers sit behind a common interface, so the engine never depends on a specific source. If a non-mandatory source is unavailable the briefing still renders, marking that input as unavailable.</p>
+        <div class="about-sources">${sources}</div>
+      </div>
+    </details>
 
-    <section class="card">
-      <div class="eyebrow">How the watershed is delineated</div>
-      <p class="about-p">Flash-flood risk is assessed over the upstream contributing basin, the land that drains toward your point, not the point itself. This matters because a slot can flood under a clear sky from rain falling miles upstream. Aggregating probability over the drainage area is what catches that.</p>
-      <ul class="about-list">
-        <li>Your raw coordinate is snapped onto the mapped stream network with a raindrop trace. It follows the terrain downhill along a flow-direction grid until it reaches a stream, which is a hydrologically correct snap rather than a blind nudge.</li>
-        <li>From that on-network pour point, the exact upstream contributing basin is delineated by splitting the catchment over the national NHD stream network. This is the precise drainage area above your point, not a coarse approximation.</li>
-        <li>If a point will not snap, the system falls back to a deterministic alternative: resolve the containing USGS HUC-12 sub-watershed and collect every HUC-12 that drains into it from the Watershed Boundary Dataset. This is snap-free and reproducible, but coarser, since it counts whole sub-watersheds.</li>
-        <li>Areas are measured on an equal-area projection, and each delineation is cached, so the same point yields the same basin and is reused across briefings.</li>
-      </ul>
-      <p class="about-p">The map's shaded basin is this delineated domain, labeled approximate. Surface delineation is a defensible proxy for canyoneering, but in karst terrain, this is a rough estimate at best. Underground drainage can cut across surface drainage basins, and cannot be readily modeled by available methodologies. Flash flood risk is intentionally assessed using the 16-km SREF grid, which gives a reasonable buffer area around the edges of the watershed and somewhat accounts for the influence of subsurface drainage. However, user judgment is always required.</p>
-    </section>
+    <details class="card about-fold">
+      <summary class="about-fold__summary">
+        <span class="about-fold__head">
+          <span class="eyebrow">How the watershed is delineated</span>
+          <span class="about-fold__teaser">How the upstream basin that drains toward your point is traced.</span>
+        </span>
+        ${icon("chevron", "about-fold__chev")}
+      </summary>
+      <div class="about-fold__body">
+        <p class="about-p">Flash-flood risk is assessed over the upstream contributing basin, the land that drains toward your point, not the point itself. This matters because a slot can flood under a clear sky from rain falling miles upstream. Aggregating probability over the drainage area is what catches that.</p>
+        <ul class="about-list">
+          <li>Your raw coordinate is snapped onto the mapped stream network with a raindrop trace. It follows the terrain downhill along a flow-direction grid until it reaches a stream, which is a hydrologically correct snap rather than a blind nudge.</li>
+          <li>From that on-network pour point, the exact upstream contributing basin is delineated by splitting the catchment over the national NHD stream network. This is the precise drainage area above your point, not a coarse approximation.</li>
+          <li>If a point will not snap, the system falls back to a deterministic alternative: resolve the containing USGS HUC-12 sub-watershed and collect every HUC-12 that drains into it from the Watershed Boundary Dataset. This is snap-free and reproducible, but coarser, since it counts whole sub-watersheds.</li>
+          <li>Areas are measured on an equal-area projection, and each delineation is cached, so the same point yields the same basin and is reused across briefings.</li>
+        </ul>
+        <p class="about-p">The map's shaded basin is this delineated domain, labeled approximate. Surface delineation is a defensible proxy for canyoneering, but in karst terrain, this is a rough estimate at best. Underground drainage can cut across surface drainage basins, and cannot be readily modeled by available methodologies. Flash flood risk is intentionally assessed using the 16-km SREF grid, which gives a reasonable buffer area around the edges of the watershed and somewhat accounts for the influence of subsurface drainage. However, user judgment is always required.</p>
+      </div>
+    </details>
 
-    <section class="card">
-      <div class="eyebrow">Derived hazard thresholds</div>
-      <p class="about-p">Every cut point is externalized, versioned configuration, never hard-coded. The engine loads the thresholds at runtime, so tuning one is a configuration edit with provenance, not a code change. The values below are the accepted initial configuration, refined through field testing. Cut points that ride on an established system (NWS warnings and watches, Heat Index categories, the SPC outlook) are standard. The numeric probability and temperature break points are UpstreamWX proposals.</p>
-      <div class="about-hazards">${thresholds}</div>
-      <p class="about-haz__note about-wrap" style="margin-top:var(--space-3)">Loaded threshold matrix version: <span class="mono">${esc(b.threshold_version)}</span></p>
-    </section>
+    <details class="card about-fold">
+      <summary class="about-fold__summary">
+        <span class="about-fold__head">
+          <span class="eyebrow">Derived hazard thresholds</span>
+          <span class="about-fold__teaser">The versioned cut points behind each hazard tier.</span>
+        </span>
+        ${icon("chevron", "about-fold__chev")}
+      </summary>
+      <div class="about-fold__body">
+        <p class="about-p">Every cut point is externalized, versioned configuration, never hard-coded. The engine loads the thresholds at runtime, so tuning one is a configuration edit with provenance, not a code change. The values below are the accepted initial configuration, refined through field testing. Cut points that ride on an established system (NWS warnings and watches, Heat Index categories, the SPC outlook) are standard. The numeric probability and temperature break points are UpstreamWX proposals.</p>
+        <div class="about-hazards">${thresholds}</div>
+        <p class="about-haz__note about-wrap" style="margin-top:var(--space-3)">Loaded threshold matrix version: <span class="mono">${esc(b.threshold_version)}</span></p>
+      </div>
+    </details>
 
     <div class="disclaimer">Reference only. Not a forecast, not a decision. These thresholds describe how the briefing reasons about hazards. They do not replace official NWS products or your own judgment in the field.</div>`;
 
