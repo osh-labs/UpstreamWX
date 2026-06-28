@@ -1546,7 +1546,7 @@ function renderResources(b) {
     <section class="card">
       <h2 class="section-title" style="margin-bottom:var(--space-3)">Export &amp; offline</h2>
       <button class="btn-primary" id="export-pdf">Export briefing to PDF</button>
-      <p style="font-size:var(--text-caption);color:var(--color-text-muted);margin-top:var(--space-3)">
+      <p style="font-size:var(--text-caption);color:var(--color-text-muted);margin-top:var(--space-3);overflow-wrap:anywhere">
         The most recent briefing is cached for offline review. ${b.cached || state.fromCache ? "Currently showing a cached copy." : "Online — showing the latest cycle."}
         Threshold matrix version <span class="mono">${esc(b.threshold_version)}</span>.
       </p>
