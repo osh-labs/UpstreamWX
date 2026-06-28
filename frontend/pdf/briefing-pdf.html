@@ -88,22 +88,13 @@
   /* ── Masthead ─────────────────────────────────────────────────────────── */
   .masthead {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
     padding-bottom: 6px;
     border-bottom: 2px solid var(--p-brand);
   }
-  .brand { display: flex; align-items: center; gap: 9px; }
-  .brand__mark {
-    width: 30px; height: 30px; flex: none;
-    color: var(--p-brand);
-  }
-  .brand__name { font-size: 16pt; font-weight: 700; letter-spacing: -0.01em; line-height: 1; }
-  .brand__tag {
-    font-size: 7.5pt; font-weight: 600; letter-spacing: 0.13em;
-    text-transform: uppercase; color: var(--p-ink-muted); margin-top: 2px;
-  }
+  .brand__logo { height: 42px; width: auto; display: block; flex: none; }
   .masthead__doc {
     text-align: right;
     font-size: 7.5pt; letter-spacing: 0.13em; text-transform: uppercase;
@@ -185,7 +176,10 @@
   .conf__dot.on { background: var(--p-brand-ink); }
 
   /* ── Phase breakdown ──────────────────────────────────────────────────── */
-  .phases { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+  /* minmax(0, 1fr) (not bare 1fr) so columns can shrink below the min-content
+     of unbreakable strings ('Lightning — Extreme', 'Cold/wet'); bare 1fr lets
+     those push the grid past the right margin and clip the last card. */
+  .phases { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
   .phase {
     border: 1px solid var(--p-border); border-radius: 8px; overflow: hidden;
     break-inside: avoid; background: var(--p-bg);
@@ -347,13 +341,6 @@ function hazIcon(hz, cls = "hz-icon") {
     stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">${ICON[hz] || ""}</svg>`;
 }
 
-const BRAND_MARK = `<svg class="brand__mark" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-  stroke-width="1.75" stroke-linejoin="round">
-  <path d="M12 2 21 7v10l-9 5-9-5V7z"/>
-  <path d="M7 14c1.5-1.6 3-1.6 4.5 0s3 1.6 4.5 0" stroke-width="1.5"/>
-  <path d="M7 10.5c1.5-1.6 3-1.6 4.5 0s3 1.6 4.5 0" stroke-width="1.5"/>
-</svg>`;
-
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 /* Confidence → filled pips (Low 1 / Moderate 2 / High 3). */
@@ -388,13 +375,7 @@ function fmtWindowRange(b) {
 function renderMasthead(b) {
   const activity = b.mission.activity === "cave" ? "Cave" : (b.mission.is_slot ? "Slot canyon" : "Canyon");
   return `<div class="masthead">
-    <div class="brand">
-      ${BRAND_MARK}
-      <div>
-        <div class="brand__name">UpstreamWX</div>
-        <div class="brand__tag">Multi-hazard caving &amp; canyoneering briefing</div>
-      </div>
-    </div>
+    <img class="brand__logo" src="logo-light.png" alt="UpstreamWX — Weather Briefing" />
     <div class="masthead__doc">Document<strong>Mission Weather Briefing</strong></div>
   </div>`;
 }
@@ -501,7 +482,7 @@ function renderForecast(b) {
     ${r.values.map((v) => `<td class="mono">${esc(v)}</td>`).join("")}
   </tr>`).join("");
   return `<div class="section section--break">
-    <div class="section__head">Hourly forecast <span class="hint">display series · never an engine input</span></div>
+    <div class="section__head">Hourly forecast</div>
     <div class="fx-wrap"><table class="fx-table">
       <thead>${head}</thead><tbody>${body}</tbody>
     </table></div>

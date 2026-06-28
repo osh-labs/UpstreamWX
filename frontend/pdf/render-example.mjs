@@ -21,6 +21,12 @@ const page = await browser.newPage();
 // Inject the briefing before the template's boot() runs.
 await page.addInitScript((data) => { window.__BRIEFING__ = JSON.parse(data); }, briefing);
 await page.goto("file://" + template, { waitUntil: "networkidle" });
+// The masthead logo <img> is added by render() after networkidle, so wait for
+// it to finish decoding before printing (else the PDF captures an empty box).
+await page.waitForFunction(() => {
+  const im = document.querySelector(".brand__logo");
+  return im && im.complete && im.naturalWidth > 0;
+}, { timeout: 5000 }).catch(() => {});
 await page.emulateMedia({ media: "print" });
 // Let the template's @page rule own size + margins (preferCSSPageSize) so the
 // fixed footer's page-area geometry matches what window.print() will produce.
