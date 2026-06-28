@@ -549,11 +549,17 @@ function renderOverview(b) {
 
   document.getElementById("view-overview").innerHTML = `
     ${missionCard(b)}
-    ${b.summary ? `<section class="card">
-      <p class="summary">${esc(b.summary)}
-        ${b.framed ? '<span class="framed-by">Summary wording only — all posture and severity values are deterministic engine output, not model-derived.</span>' : ""}
-      </p>
-    </section>` : ""}
+    ${b.summary ? `<details class="hazard-detail">
+      <summary class="hazard-detail__summary">
+        <span class="hazard-detail__name">Risk Discussion</span>
+        ${icon("chevron", "hazard-detail__chev")}
+      </summary>
+      <div class="hazard-detail__body">
+        <p class="summary">${esc(b.summary)}
+          ${b.framed ? '<span class="framed-by">Summary wording only — all posture and severity values are deterministic engine output, not model-derived.</span>' : ""}
+        </p>
+      </div>
+    </details>` : ""}
     <section class="card"><h2 class="section-title" style="margin-bottom:var(--space-2)">Hazards</h2>
       <div class="hazard-list">${hazards}</div>
     </section>
