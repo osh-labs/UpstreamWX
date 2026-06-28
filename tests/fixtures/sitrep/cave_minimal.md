@@ -1,4 +1,4 @@
-# Expedition Briefing
+# EXPEDITION BRIEFING
 
 **Mission:** Dry Cave  |  **Type:** Cave  |  **Window:** 2026-06-20 08:00–2026-06-20 18:00
 **Location:** 37.0000, -112.0000  |  **Upstream domain:** (not resolved)

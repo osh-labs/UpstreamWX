@@ -1,4 +1,4 @@
-# Expedition Briefing
+# EXPEDITION BRIEFING
 
 **Mission:** Buckskin Gulch  |  **Type:** Canyon  |  **Window:** 2026-06-20 08:00–2026-06-20 18:00
 **Location:** 37.0192, -111.9889  |  **Upstream domain:** HUC-12 150100021304 (+3 upstream, 842 km²)

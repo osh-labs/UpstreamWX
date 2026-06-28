@@ -101,7 +101,7 @@ def render_md(
     lines: list[str] = []
 
     # ---- Header -----------------------------------------------------------------
-    lines.append("# Expedition Briefing")
+    lines.append("# EXPEDITION BRIEFING")
     lines.append("")
     lines.append(
         f"**Mission:** {mission.name}  |  "
