@@ -711,10 +711,12 @@ function lineChart(series, labels, colors) {
     return `<path d="${d}" fill="none" stroke="${colors[si]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
   }).join("");
 
-  // Anchor the first label to its start and the last to its end so neither
-  // overruns the chart edge (the rightmost label was being clipped).
+  // Show at most ~5 evenly-spaced tick labels so they don't overlap on mobile.
+  // step=1 for ≤5 labels, step=2 for 6-10, step=3 for 11-15, etc.
+  const tickStep = Math.max(1, Math.ceil(labels.length / 5));
   const ticks = labels.map((l, i) => {
-    const anchor = i === 0 ? "start" : i === labels.length - 1 ? "end" : "middle";
+    if (i % tickStep !== 0) return "";
+    const anchor = i === 0 ? "start" : "middle";
     return `<text x="${xFn(i)}" y="${H - 5}" fill="var(--color-text-muted)" font-size="9" text-anchor="${anchor}">${esc(l)}</text>`;
   }).join("");
 
