@@ -1401,6 +1401,53 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 /* Long, unspaced strings (e.g. the threshold version) must wrap inside the card. */
 .about-wrap, .about-wrap .mono { overflow-wrap: anywhere; }
 
+/* Lead cards: producer credit + donation. These come first so the human/support
+   zone is read before the collapsed methodology below. */
+.about-contact { display: inline-block; margin-top: var(--space-2); font-size: var(--text-label); font-weight: 600; color: var(--color-brand); }
+.about-support { border-color: rgba(56, 189, 248, 0.30); }
+.about-donate {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  background: var(--color-brand);
+  color: var(--color-text-inverse);
+  border-radius: var(--radius-md);
+  font-size: var(--text-label);
+  font-weight: 650;
+  text-decoration: none;
+}
+.about-donate:hover { background: var(--color-brand-strong); }
+.about-donate__icon { width: 18px; height: 18px; }
+.about-support__note { font-size: var(--text-caption); line-height: var(--lh-caption); color: var(--color-text-muted); margin: var(--space-2) 0 0; }
+
+/* "How this is calculated" section heading above the collapsed methodology. */
+.about-section-head { font-size: var(--text-h2); line-height: var(--lh-h2); font-weight: 620; margin-top: var(--space-2); }
+
+/* Collapsible methodology cards (native <details>): summary leads, body expands.
+   Keeps the dense technical detail one tap away instead of dominating the page. */
+.about-fold { padding: 0; }
+.about-fold__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  cursor: pointer;
+  list-style: none;
+}
+.about-fold__summary::-webkit-details-marker { display: none; }
+.about-fold__summary:focus-visible { outline: 2px solid var(--color-brand-strong); outline-offset: -2px; border-radius: var(--radius-lg); }
+.about-fold__head { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.about-fold__teaser { font-size: var(--text-caption); line-height: var(--lh-caption); color: var(--color-text-muted); }
+.about-fold__chev { width: 20px; height: 20px; color: var(--color-text-muted); flex-shrink: 0; transition: transform var(--dur) var(--ease); }
+.about-fold[open] .about-fold__chev { transform: rotate(180deg); }
+.about-fold__body { padding: 0 var(--space-4) var(--space-4); }
+.about-fold__body > .about-p:first-child { margin-top: 0; }
+@media (prefers-reduced-motion: reduce) { .about-fold__chev { transition: none; } }
+
 /* ── 7.11 Briefing tab — Markdown SITREP render ───────────────────── */
 .briefing-framed-note {
   font-size: var(--text-caption);
