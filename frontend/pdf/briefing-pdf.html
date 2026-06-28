@@ -74,6 +74,11 @@
     line-height: 1.45;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
+    /* Disable mobile/WebKit text auto-inflation (iOS Safari enlarges body text
+       on print, which blew the fonts up and broke pagination — 2 pages became
+       3). Pin it so the pt sizes render as authored on every device. */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
   }
 
   .mono { font-family: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace; }
@@ -320,10 +325,12 @@ const SEV_COLOR = {
   "sev-elevated": "var(--sev-elevated)",
   "sev-high": "var(--sev-high)",
   "sev-extreme": "var(--sev-extreme)",
+  // Heat keys must match the engine's CSS class: heat-{HeatCategory.name.lower()},
+  // i.e. heat-extreme_caution / heat-extreme_danger (NOT ext-caution).
   "heat-caution": "var(--heat-caution)",
-  "heat-ext-caution": "var(--heat-ext-caution)",
+  "heat-extreme_caution": "var(--heat-ext-caution)",
   "heat-danger": "var(--heat-danger)",
-  "heat-ext-danger": "var(--heat-ext-danger)",
+  "heat-extreme_danger": "var(--heat-ext-danger)",
 };
 const sevColor = (cls) => SEV_COLOR[cls] || "var(--p-ink-2)";
 
@@ -416,13 +423,28 @@ function renderBluf(b) {
         <span class="bluf__conf">Confidence: <strong>${esc(b.overall_confidence)}</strong></span>
       </div>
       <div class="bluf__divider"></div>
-      <p class="bluf__summary">${esc(b.summary)}</p>
+      <p class="bluf__summary">${blufSummary(b)}</p>
     </div>
     ${b.framed ? `<div class="framed-banner">Plain-language summary framed by an AI language model. It narrates the engine's structured result and does not change any posture, tier, or confidence.</div>` : ""}
   </div>`;
 }
 function severityClassFor(label) {
   return { Minimal: "sev-minimal", Elevated: "sev-elevated", High: "sev-high", Extreme: "sev-extreme" }[label] || "";
+}
+/* The contract's `summary` is the optional Haiku framing — null when framing is
+   off (the usual production case). Fall back to a deterministic recap of the
+   engine's own postures so the BLUF box is never empty. Reference-only: it
+   restates the structured result and issues no recommendation. */
+function blufSummary(b) {
+  if (b.summary) return esc(b.summary);
+  const recap = (b.bluf || [])
+    .map((h) => `${HAZARD_LABEL[h.hazard] || h.hazard} ${h.label}`)
+    .join(" · ");
+  return esc(
+    `Overall posture ${b.overall_posture}, confidence ${b.overall_confidence}. ` +
+    (recap ? `By hazard: ${recap}. ` : "") +
+    "Planning reference only; verify against the official NWS sources and let conditions in the field overrule this briefing."
+  );
 }
 
 function renderHazardTable(b) {
