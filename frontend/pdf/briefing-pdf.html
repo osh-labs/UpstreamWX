@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>UpstreamWX — Mission Weather Briefing</title>
+<title>UpstreamWX — Expedition Weather Briefing</title>
 <!--
   PDF export template (FR-27, PRD §17.3).
 
@@ -379,7 +379,7 @@ function renderMasthead(b) {
   const activity = b.mission.activity === "cave" ? "Cave" : (b.mission.is_slot ? "Slot canyon" : "Canyon");
   return `<div class="masthead">
     <img class="brand__logo" src="logo-light.png" alt="UpstreamWX — Weather Briefing" />
-    <div class="masthead__doc">Document<strong>Mission Weather Briefing</strong></div>
+    <div class="masthead__doc">Document<strong>Expedition Weather Briefing</strong></div>
   </div>`;
 }
 
@@ -559,15 +559,53 @@ function render(b) {
   document.body.insertAdjacentHTML("beforeend", renderPageFoot(b));
 }
 
-/* Data: injected live briefing wins; otherwise the committed worked example. */
+/* The app hands off the live briefing through localStorage (one-shot, read and
+   cleared here) and opens this page with ?print=1 to drive Save-as-PDF. */
+const PDF_HANDOFF_KEY = "uwx.pdf.briefing";
+function readHandoffBriefing() {
+  try {
+    const raw = localStorage.getItem(PDF_HANDOFF_KEY);
+    if (raw) {
+      localStorage.removeItem(PDF_HANDOFF_KEY);
+      return JSON.parse(raw);
+    }
+  } catch (e) {
+    /* storage blocked — fall through to the opener reference */
+  }
+  try {
+    if (window.opener && window.opener.__uwxPdfBriefing) return window.opener.__uwxPdfBriefing;
+  } catch (e) {
+    /* cross-origin opener — ignore */
+  }
+  return null;
+}
+/* Don't print before the masthead logo has decoded, or the PDF shows an empty
+   logo box. */
+function whenLogoReady() {
+  const im = document.querySelector(".brand__logo");
+  if (!im || (im.complete && im.naturalWidth > 0)) return Promise.resolve();
+  return new Promise((resolve) => {
+    im.addEventListener("load", resolve, { once: true });
+    im.addEventListener("error", resolve, { once: true });
+    setTimeout(resolve, 3000);
+  });
+}
+
+/* Data precedence: injected (the headless example renderer) → app handoff →
+   the committed worked example (standalone open). */
 (async function boot() {
   try {
-    let b = window.__BRIEFING__;
+    let b = window.__BRIEFING__ || readHandoffBriefing();
     if (!b) {
       const res = await fetch("../data/sample-briefing.json", { cache: "no-store" });
       b = await res.json();
     }
     render(b);
+    if (new URLSearchParams(location.search).has("print")) {
+      await whenLogoReady();
+      window.focus();
+      window.print();
+    }
   } catch (e) {
     document.getElementById("sheet").innerHTML =
       `<p style="color:#b00">Could not load briefing data: ${esc(e.message)}</p>`;
