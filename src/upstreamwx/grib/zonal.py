@@ -134,16 +134,27 @@ def aggregate_over_polygon(
         # Polygon smaller than a grid cell: nearest-cell at centroid.
         fallback = True
         c = geom.centroid
+        lat, lon = da["latitude"], da["longitude"]
         # Shortest angular Δlon so the nearest-cell search is correct whether the
-        # grid stores longitude as -180..180 (SREF) or 0..360 (HREF).
-        dlon = (da["longitude"] - c.x + 180) % 360 - 180
-        dist = (da["latitude"] - c.y) ** 2 + dlon**2
-        flat = int(np.argmin(dist.values))
-        ny, nx = da["latitude"].shape
-        iy, ix = divmod(flat, nx)
-        sel = da.isel({spatial_dims[0]: iy, spatial_dims[1]: ix}) if len(
-            spatial_dims
-        ) == 2 else da
+        # grid stores longitude as -180..180 (SREF/REFS) or 0..360 (GEFS).
+        if lat.ndim == 2:
+            # Curvilinear 2D lat/lon (the SREF/HREF/REFS Lambert grids) on (y, x): one
+            # flat argmin over the squared great-circle-ish distance, then unravel.
+            dlon = (lon - c.x + 180) % 360 - 180
+            dist = (lat - c.y) ** 2 + dlon**2
+            flat = int(np.argmin(dist.values))
+            ny, nx = lat.shape
+            iy, ix = divmod(flat, nx)
+            sel = da.isel({spatial_dims[0]: iy, spatial_dims[1]: ix})
+        else:
+            # Regular 1D lat/lon grid (the GEFS global mesh): the nearest index along each
+            # axis independently. The 2D path's ``lat.shape`` unpack assumes curvilinear
+            # coords and raised ValueError here, sinking the whole GEFS source on any domain
+            # too small to hold a 0.25° cell centre (a 24 km LAoC disk, a clipped RoC).
+            iy = int(np.argmin(np.abs(lat.values - c.y)))
+            dlon = (lon.values - c.x + 180) % 360 - 180
+            ix = int(np.argmin(np.abs(dlon)))
+            sel = da.isel({lat.dims[0]: iy, lon.dims[0]: ix})
         masked = sel
         max_value = float(np.nanmax(sel.values))
         mean_value = float(np.nanmean(sel.values))
