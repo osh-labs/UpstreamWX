@@ -921,6 +921,7 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 
 /* ── 7.14 Status / currency line ───────────────────────────────────── */
 .status-line {
+  position: relative;  /* contains the progress bar strip at top:0 */
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -979,6 +980,28 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
    sits beside it rather than re-pushing to the far right. */
 .status-line__install:not([hidden]) ~ .status-line__gear { margin-left: var(--space-1); }
 .status-line__currency { font-family: var(--font-mono); }
+/* Thin progress strip pinned to the top edge of the status bar.  Runs while a
+   briefing is being generated (app.js startProgress / completeProgress). */
+.status-line__progress {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: var(--color-border);
+  overflow: hidden;
+}
+.status-line__progress-fill {
+  height: 100%;
+  width: 0;
+  background: var(--color-brand);
+  border-radius: 0 var(--radius-pill) var(--radius-pill) 0;
+}
+@keyframes uwx-progress {
+  from { width: 0; }
+  to   { width: 80%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .status-line__progress-fill { animation: none !important; width: 40% !important; }
+}
 .cached-badge {
   display: inline-flex;
   align-items: center;

@@ -473,6 +473,7 @@ async function refresh(spec) {
     return;
   }
   if (status) status.innerHTML = `<span class="status-line__currency">Updating briefing…</span>`;
+  startProgress();
   let b;
   try {
     b = await postBriefing(spec);
@@ -480,6 +481,7 @@ async function refresh(spec) {
     // 503/504 (server busy / gateway timeout) and bare network failures (TypeError from fetch)
     // are transient: surface a yellow retry banner wired to re-run THIS spec, and keep the
     // previous briefing on screen. Other errors (bad request, 500) get the inline status note.
+    completeProgress();
     const transient = !!e && (e.retryable || e instanceof TypeError);
     if (transient) {
       showBusyBanner(spec);
@@ -494,6 +496,7 @@ async function refresh(spec) {
     }
     return;
   }
+  completeProgress();
   hideBusyBanner();
   renderAll(b);
   streamSummary(spec);
@@ -1903,6 +1906,47 @@ function closeAbout() {
   selectTab("resources");
 }
 
+/* ── Briefing generation progress bar ──────────────────────────────── */
+// Thin brand-cyan strip at the top of the status bar.  Crawls to ~80 % while
+// the server generates, then snaps to 100 % and fades out on completion.
+let _progressTimer = null;
+
+function startProgress() {
+  const bar = document.getElementById("briefing-progress");
+  const fill = document.getElementById("briefing-progress-fill");
+  if (!bar || !fill) return;
+  if (_progressTimer) { clearTimeout(_progressTimer); _progressTimer = null; }
+  // Reset cleanly before showing.
+  fill.style.animation = "none";
+  fill.style.transition = "none";
+  fill.style.opacity = "1";
+  fill.style.width = "0";
+  bar.hidden = false;
+  void fill.offsetWidth;  // flush so the reset takes effect before animation starts
+  // Animate to 80 % over 15 s; the slow-ease curve frontloads movement then crawls,
+  // giving honest feedback without implying a known completion time.
+  fill.style.animation = "uwx-progress 15s cubic-bezier(0.1,0.6,0.4,0.95) forwards";
+}
+
+function completeProgress() {
+  const bar = document.getElementById("briefing-progress");
+  const fill = document.getElementById("briefing-progress-fill");
+  if (!bar || !fill) return;
+  // Stop the indefinite crawl, snap to 100 %, then fade out.
+  fill.style.animation = "none";
+  void fill.offsetWidth;
+  fill.style.transition = "width 200ms ease, opacity 400ms ease 150ms";
+  fill.style.width = "100%";
+  fill.style.opacity = "0";
+  _progressTimer = setTimeout(() => {
+    bar.hidden = true;
+    fill.style.transition = "none";
+    fill.style.width = "0";
+    fill.style.opacity = "1";
+    _progressTimer = null;
+  }, 700);
+}
+
 /* ── Status / currency line (FR-39, FR-41) ─────────────────────────── */
 function renderStatus(b) {
   const gen = new Date(b.generated_at);
@@ -2532,11 +2576,13 @@ async function main() {
   };
   const ackShown = maybeShowAck(promptFirstRun);
   let b;
+  startProgress();
   try {
     b = await loadBriefing(savedSpec() || DEFAULT_SPEC);
   } catch (e) {
     // A transient failure (server busy / gateway timeout / network) gets the retry banner so the
     // user can re-run without reloading the app; other errors show the inline explanation.
+    completeProgress();
     if (e && (e.retryable || e instanceof TypeError)) {
       showBusyBanner(savedSpec() || DEFAULT_SPEC);
     }
@@ -2546,6 +2592,7 @@ async function main() {
       `source is unavailable — please try again shortly.</p></section>`;
     return;
   }
+  completeProgress();
   const initialSpec = savedSpec() || DEFAULT_SPEC;
   renderAll(b);
   streamSummary(initialSpec);
