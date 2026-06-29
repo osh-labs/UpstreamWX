@@ -1278,12 +1278,12 @@
     ]
   },
   "risk_inputs": {
-    "sref_p_precip": 65,
-    "sref_p_tstm": 92,
-    "href_in_range": true,
-    "href_p_precip": 4,
-    "href_p_lightning": 38,
-    "href_cycle": "20260618/12Z",
+    "gefs_p_precip": 65,
+    "gefs_p_tstm": 92,
+    "refs_in_range": true,
+    "refs_p_precip": 4,
+    "refs_p_lightning": 38,
+    "refs_cycle": "20260618/12Z",
     "cape_jkg": 1800,
     "convective_rate_in_per_hr": null,
     "spc_category": "MRGL",

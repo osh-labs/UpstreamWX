@@ -720,14 +720,14 @@ function renderRiskInputs(ri) {
   }
 
   const cards = [];
-  if (ri.sref_p_precip != null)
-    cards.push(riCard("SREF P(precip)", "flash_flood", ri.sref_p_precip, "%", "Flood input"));
-  if (ri.sref_p_tstm != null)
-    cards.push(riCard("SREF P(tstm)", "lightning", ri.sref_p_tstm, "%", "T-storm input"));
-  if (ri.href_in_range && ri.href_p_precip != null)
-    cards.push(riCard("HREF P(QPF)", "flash_flood", ri.href_p_precip, "%", "Same-day flood"));
-  if (ri.href_in_range && ri.href_p_lightning != null)
-    cards.push(riCard("HREF P(ltg)", "lightning", ri.href_p_lightning, "%", "Same-day ltg"));
+  if (ri.gefs_p_precip != null)
+    cards.push(riCard("SREF P(precip)", "flash_flood", ri.gefs_p_precip, "%", "Flood input"));
+  if (ri.gefs_p_tstm != null)
+    cards.push(riCard("SREF P(tstm)", "lightning", ri.gefs_p_tstm, "%", "T-storm input"));
+  if (ri.refs_in_range && ri.refs_p_precip != null)
+    cards.push(riCard("HREF P(QPF)", "flash_flood", ri.refs_p_precip, "%", "Same-day flood"));
+  if (ri.refs_in_range && ri.refs_p_lightning != null)
+    cards.push(riCard("HREF P(ltg)", "lightning", ri.refs_p_lightning, "%", "Same-day ltg"));
   if (ri.cape_jkg != null)
     cards.push(riCard("CAPE", "lightning", ri.cape_jkg, " J/kg", "Instability"));
   if (ri.convective_rate_in_per_hr != null)
@@ -740,7 +740,7 @@ function renderRiskInputs(ri) {
   if (ri.flood_watch) badges.push(`<span class="ri-badge ri-badge--watch">Flood watch</span>`);
   if (ri.thunderstorm_warning) badges.push(`<span class="ri-badge ri-badge--warn">Thunderstorm warning</span>`);
   if (ri.spc_category) badges.push(`<span class="ri-badge">SPC ${esc(ri.spc_category)}</span>`);
-  if (ri.href_in_range && ri.href_cycle) badges.push(`<span class="ri-badge">HREF ${esc(ri.href_cycle)}</span>`);
+  if (ri.refs_in_range && ri.refs_cycle) badges.push(`<span class="ri-badge">HREF ${esc(ri.refs_cycle)}</span>`);
 
   return `<section class="card">
     <h2 class="section-title" style="margin-bottom:var(--space-2)">Risk analysis inputs</h2>

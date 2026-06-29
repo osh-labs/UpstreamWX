@@ -148,7 +148,7 @@ def test_offline_inputs_mission_not_registered(monkeypatch):
     spec = MissionSpec(
         lat=37.0, lon=-112.0, activity="canyon",
         start="2026-06-20T08:00", end="2026-06-20T18:00",
-        frame=False, inputs={"sref_p_precip": 50},
+        frame=False, inputs={"gefs_p_precip": 50},
     )
     service.get_briefing(spec, now=_utc(2026, 6, 19, 12))
     assert service.active_count == 0

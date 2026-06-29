@@ -191,38 +191,9 @@ def test_cached_cycles_empty_when_no_cache(settings: Settings) -> None:
     assert cached_cycles(settings=settings) == []
 
 
-def test_resolve_cycle_prefers_cache_over_live_probe(settings: Settings, fixtures_dir) -> None:
-    """The provider reads the freshest warmed cycle off disk and skips the NOMADS probe."""
-    from unittest.mock import patch
-
-    from upstreamwx.ingest import sref_provider
-
-    path = _cycle_dir(settings, CYCLE) / _subset_name(*FIELD)
-    _place_fixture(path, fixtures_dir)
-
-    with patch(
-        "upstreamwx.ingest.sref_provider.latest_available_cycle",
-        side_effect=AssertionError("must not probe NOMADS when a cycle is cached"),
-    ):
-        resolved = sref_provider._resolve_cycle(None, settings=settings)
-
-    assert (resolved.date, resolved.hour) == (CYCLE.date, CYCLE.hour)
-
-
-def test_resolve_cycle_falls_back_to_live_when_cache_cold(settings: Settings) -> None:
-    """With nothing cached, resolution falls back to the live NOMADS probe (NFR-6)."""
-    from unittest.mock import patch
-
-    from upstreamwx.ingest import sref_provider
-
-    with patch(
-        "upstreamwx.ingest.sref_provider.cached_cycles", return_value=[]
-    ), patch(
-        "upstreamwx.ingest.sref_provider.latest_available_cycle", return_value=CYCLE
-    ):
-        resolved = sref_provider._resolve_cycle(None, settings=settings)
-
-    assert resolved == CYCLE
+# NB: the SREF→GEFS transition (NWS SCN 26-47) removed the SREF ingest adapter; the
+# provider-level _resolve_cycle (prefer-warm-cache vs live-probe) is now covered for GEFS in
+# tests/test_gefs_provider.py. This module still exercises the SREF *package* cache primitives.
 
 
 # --- warm_and_prune + scheduler cadence (no real clock) ---------------------
