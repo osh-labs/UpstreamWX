@@ -84,7 +84,8 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     cycles.py              pure SREF-cycle arithmetic (03/09/15/21Z)
     scheduler.py           asyncio refresh loop
     models.py              MissionSpec request / BriefingResponse (pydantic)
-spikes/                  runnable de-risk CLIs (spike_a..d) — historical, still runnable
+spikes/                  runnable de-risk CLIs (spike_a..f) — historical, still runnable
+                           (spike_e REFS / spike_f GEFS de-risk the SREF+HREF EOL transition; see docs/m0.0)
 tests/                   hermetic suite + committed fixtures + validation corpus
   corpus/*.yaml            the validation oracle: boundary cases per hazard + historical_replay
   fixtures/                committed sample data (GRIB2 subsets, GeoJSON, golden SITREP .md)
