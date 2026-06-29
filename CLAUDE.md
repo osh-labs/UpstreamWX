@@ -196,7 +196,9 @@ When you change generation behavior, change it there — not in two places.
 
 Ensemble lead-time rule: REFS inside the same-day window (~6–36 h), GEFS beyond; where
 both are in range the engine takes the **higher** tier (FR-19), and REFS (3 km) is
-**authoritative in-window** for confidence (its member support overrides coarse GEFS).
+**authoritative in-window** for confidence: ingest folds REFS member support into
+`member_support[hazard]` (overriding coarse GEFS), and `engine/confidence.py` reads that
+`member_support` — the engine never special-cases REFS, keeping the provider boundary clean.
 GEFS has no native thunderstorm field, so lightning beyond REFS range uses a GEFS
 CAPE×precip member-exceedance **proxy** (`gefs_p_tstm`); REFS `LTNG` drives it in-window.
 
@@ -340,7 +342,7 @@ in `docs/m0.0/`.
 
 ## Working agreements
 
-- **Branch:** develop on `claude/haiku-briefing-tab-3ywgn6` (create locally if
+- **Branch:** develop on `claude/codebase-review-v0.5.0-xu0o7t` (create locally if
   needed). Never push to a different branch without explicit permission. Commit with
   clear messages; push with `git push -u origin <branch>` (retry with backoff on
   network errors). **Do not open a PR unless explicitly asked.**
