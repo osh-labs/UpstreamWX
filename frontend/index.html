@@ -45,6 +45,10 @@
       </main>
 
       <div class="status-line">
+        <!-- Indeterminate progress bar shown while a briefing is being generated. -->
+        <div class="status-line__progress" id="briefing-progress" hidden aria-hidden="true">
+          <div class="status-line__progress-fill" id="briefing-progress-fill"></div>
+        </div>
         <div class="status-line__content" id="status"></div>
         <!-- Add-to-Home-Screen: shown only when the browser offers an install prompt
              (beforeinstallprompt). Hidden by default; app.js unhides + wires it. -->
