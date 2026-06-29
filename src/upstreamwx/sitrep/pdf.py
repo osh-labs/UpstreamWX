@@ -102,7 +102,9 @@ async def render_pdf(briefing: dict) -> bytes:
     # making a file:// → file:// fetch (which Chromium blocks).
     display_config_path = _TEMPLATE.parent.parent / "data" / "display-config.json"
     try:
-        display_config_json = display_config_path.read_text() if display_config_path.exists() else "{}"
+        display_config_json = (
+            display_config_path.read_text() if display_config_path.exists() else "{}"
+        )
     except OSError:
         display_config_json = "{}"
 

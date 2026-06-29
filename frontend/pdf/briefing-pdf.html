@@ -441,20 +441,21 @@ function fmtWindow(w) {
   if (!w) return "—";
   return w.replace(/\b(\d{2})(\d{2})\b/g, "$1:$2");
 }
-function fmtWhen(iso) {
+function fmtWhen(iso, tz) {
   if (!iso) return "—";
   const d = new Date(iso);
   if (isNaN(d)) return iso;
-  return d.toLocaleString("en-US", {
-    year: "numeric", month: "short", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", hour12: false,
-  });
+  const opts = { year: "numeric", month: "short", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false };
+  if (tz) opts.timeZone = tz;
+  return d.toLocaleString("en-US", opts);
 }
 function fmtWindowRange(b) {
+  const tz = b.mission.timezone;
   const s = new Date(b.mission.window_start), e = new Date(b.mission.window_end);
-  const day = { month: "short", day: "numeric" };
-  const t = { hour: "2-digit", minute: "2-digit", hour12: false };
-  return `${s.toLocaleDateString("en-US", day)}, ${s.toLocaleTimeString("en-US", t)}–${e.toLocaleTimeString("en-US", t)} ${b.mission.timezone}`;
+  const day = { month: "short", day: "numeric", ...(tz ? { timeZone: tz } : {}) };
+  const t = { hour: "2-digit", minute: "2-digit", hour12: false, ...(tz ? { timeZone: tz } : {}) };
+  return `${s.toLocaleDateString("en-US", day)}, ${s.toLocaleTimeString("en-US", t)}–${e.toLocaleTimeString("en-US", t)} ${tz}`;
 }
 
 /* ── Section renderers ────────────────────────────────────────────────────── */
