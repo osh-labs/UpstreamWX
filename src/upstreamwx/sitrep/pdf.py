@@ -60,7 +60,15 @@ async def render_pdf(briefing: dict) -> bytes:
         raise FileNotFoundError(f"PDF template not found: {template_path}")
 
     exe = _chromium_path()
-    launch_kwargs: dict = {"headless": True}
+    launch_kwargs: dict = {
+        "headless": True,
+        # --no-sandbox: Chromium's renderer sandbox uses Linux user namespaces, which the
+        # production systemd unit restricts (RestrictNamespaces=true).  We only ever load
+        # a local file:// URL we generate, so losing the sandbox here has no security impact.
+        # --disable-dev-shm-usage: avoids /dev/shm exhaustion in constrained environments
+        # (systemd PrivateTmp, containers); Chromium falls back to /tmp instead.
+        "args": ["--no-sandbox", "--disable-dev-shm-usage"],
+    }
     if exe:
         launch_kwargs["executable_path"] = exe
 

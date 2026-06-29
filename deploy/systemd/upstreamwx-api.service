@@ -19,6 +19,9 @@ User=__USER__
 Group=__GROUP__
 WorkingDirectory=__APP_DIR__
 EnvironmentFile=__ENV_FILE__
+# Playwright's headless Chromium binary location (server-side PDF export, FR-27).
+# deploy.sh installs the binary here via `playwright install chromium`.
+Environment=PLAYWRIGHT_BROWSERS_PATH=__APP_DIR__/.playwright-browsers
 ExecStart=__APP_DIR__/.venv/bin/uvicorn upstreamwx.api.app:app --host __BIND_HOST__ --port __BIND_PORT__
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
@@ -32,7 +35,7 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=__DATA_DIR__
+ReadWritePaths=__DATA_DIR__ __APP_DIR__/.playwright-browsers
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
