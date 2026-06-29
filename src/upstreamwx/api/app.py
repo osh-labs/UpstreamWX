@@ -152,6 +152,44 @@ async def frame_stream(spec: MissionSpec) -> StreamingResponse:
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
+@app.post("/v1/briefing/pdf")
+async def briefing_pdf(briefing: BriefingResponse) -> Response:
+    """Render the structured briefing as a downloadable PDF via headless Chromium (FR-27).
+
+    Accepts the ``BriefingResponse`` JSON the PWA already holds in memory, renders it
+    through the print-optimised ``frontend/pdf/briefing-pdf.html`` template server-side,
+    and returns ``application/pdf`` bytes.  The browser receives an attachment with a
+    descriptive filename — the user downloads and prints without any browser URL chrome
+    or iOS print-preview trap.
+
+    Requires ``playwright`` and the pre-installed Chromium (``/opt/pw-browsers/...``).
+    Returns 503 when Playwright is unavailable so the client can fall back gracefully.
+    """
+    try:
+        from ..sitrep.pdf import render_pdf
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Server-side PDF rendering unavailable (playwright not installed).",
+        ) from exc
+
+    try:
+        pdf_bytes = await render_pdf(briefing.model_dump(mode="json"))
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("pdf render failed")
+        raise HTTPException(status_code=500, detail=f"PDF render error: {exc}") from exc
+
+    mission_name = (briefing.mission.get("name") or "briefing").replace(" ", "_")
+    filename = f"upstreamwx_{mission_name}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @app.post("/v1/watershed/warm", status_code=202)
 def warm_watershed(req: WatershedWarmRequest) -> dict:
     """Pre-warm the pour-point watershed cache for a point (FR-3).

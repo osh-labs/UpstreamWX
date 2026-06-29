@@ -1643,23 +1643,46 @@ function renderResources(b) {
   if (about) about.addEventListener("click", openAbout);
 }
 
-/* Export the current briefing to PDF (FR-27). Hands the structured briefing to
- * the print template (frontend/pdf/briefing-pdf.html) through localStorage and
- * navigates to it with ?print=1, which renders the briefing and triggers the
- * browser's Save-as-PDF. Single-tab on purpose: iOS traps the print preview in
- * a popup tab that can't be dismissed, so we stay in the current tab and the
- * template offers a Back control to return here. Single-origin, so it works for
- * the deployed PWA and offline (template + logo are precached by the SW). */
-function exportBriefingPdf(b) {
+/* Export the current briefing to PDF (FR-27).
+ *
+ * Sends the structured briefing to POST /v1/briefing/pdf, which renders
+ * briefing-pdf.html server-side via headless Chromium and returns a clean PDF
+ * with no browser URL chrome or iOS print-preview traps.  The user downloads
+ * it and prints at will.
+ *
+ * Falls back to the client-side localStorage → print path when the server
+ * endpoint is unavailable (offline PWA, older deploy without Playwright). */
+async function exportBriefingPdf(b) {
   const briefing = b || state.briefing;
   if (!briefing) return;
+
+  const btn = document.getElementById("export-pdf");
+  if (btn) { btn.disabled = true; btn.textContent = "Generating PDF…"; }
+
   try {
-    localStorage.setItem("uwx.pdf.briefing", JSON.stringify(briefing));
+    const res = await fetch("/v1/briefing/pdf", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(briefing),
+    });
+    if (!res.ok) throw new Error(`server pdf: ${res.status}`);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const name = (briefing.mission?.name || "briefing").replace(/\s+/g, "_");
+    a.href = url;
+    a.download = `upstreamwx_${name}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   } catch (e) {
-    // Storage blocked (private mode / quota): the template falls back to the
-    // last-cached briefing. Rare; don't block the export.
+    // Server unavailable or offline — fall back to the client-side print path.
+    try { localStorage.setItem("uwx.pdf.briefing", JSON.stringify(briefing)); } catch (_) {}
+    window.location.assign("pdf/briefing-pdf.html?print=1");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Export briefing to PDF"; }
   }
-  window.location.assign("pdf/briefing-pdf.html?print=1");
 }
 
 /* ── About & methodology (FR-20 "how this is calculated") ──────────────
