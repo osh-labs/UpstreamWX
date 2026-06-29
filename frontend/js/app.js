@@ -473,6 +473,7 @@ async function refresh(spec) {
     return;
   }
   if (status) status.innerHTML = `<span class="status-line__currency">Updating briefing…</span>`;
+  startProgress();
   let b;
   try {
     b = await postBriefing(spec);
@@ -480,6 +481,7 @@ async function refresh(spec) {
     // 503/504 (server busy / gateway timeout) and bare network failures (TypeError from fetch)
     // are transient: surface a yellow retry banner wired to re-run THIS spec, and keep the
     // previous briefing on screen. Other errors (bad request, 500) get the inline status note.
+    completeProgress();
     const transient = !!e && (e.retryable || e instanceof TypeError);
     if (transient) {
       showBusyBanner(spec);
@@ -494,6 +496,7 @@ async function refresh(spec) {
     }
     return;
   }
+  completeProgress();
   hideBusyBanner();
   renderAll(b);
   streamSummary(spec);
@@ -1903,6 +1906,89 @@ function closeAbout() {
   selectTab("resources");
 }
 
+/* ── Boot-time loading skeleton (FR-39, FR-41) ─────────────────────── */
+// Called immediately after renderTabs() — fills the header and overview with
+// placeholder structure so the 10–15 s generation wait isn't a blank page.
+// renderAll() overwrites every element this touches, so no cleanup is needed.
+function renderLoadingState() {
+  // Brand-only header: logo is static, no briefing data required yet.
+  document.getElementById("header").innerHTML = `
+    <div class="brand">
+      <img src="icons/logo.png" class="brand__logo" alt="UpstreamWX Weather Briefing" />
+    </div>
+    <div class="app-header__spacer"></div>`;
+  // Status line: mirror the "Updating…" text used by refresh() so the copy is consistent.
+  const statusEl = document.getElementById("status");
+  if (statusEl) {
+    statusEl.innerHTML = `<span class="status-line__currency">Generating briefing…</span>`;
+  }
+  // Use the saved spec if available so the user's own mission name and coords appear
+  // in the skeleton; fall back to DEFAULT_SPEC for first-run (ack modal will cover this).
+  const spec = savedSpec() || DEFAULT_SPEC;
+  const name = spec.name || "Your expedition";
+  const coords = `${Number(spec.lat).toFixed(4)}, ${Number(spec.lon).toFixed(4)}`;
+  const skelRows = [0, 1, 2, 3].map(() => `
+    <div class="skel-hazard-line">
+      <div class="skel skel--icon"></div>
+      <div class="skel-hazard-line__body"><div class="skel skel--label"></div></div>
+      <div class="skel-hazard-line__right"><div class="skel skel--chip"></div></div>
+    </div>`).join("");
+  document.getElementById("view-overview").innerHTML = `
+    <section class="card mission-card">
+      <div class="mission-card__main">
+        <div class="eyebrow">Expedition</div>
+        <h1 class="mission-card__title">${esc(name)}</h1>
+        <div class="mission-card__meta"><span class="mono">${esc(coords)}</span></div>
+      </div>
+      <div class="mission-card__posture">
+        <div class="eyebrow">Overall posture</div>
+        <div class="skel skel--chip"></div>
+      </div>
+    </section>
+    <section class="card">${skelRows}</section>`;
+}
+
+/* ── Briefing generation progress bar ──────────────────────────────── */
+// Thin brand-cyan strip at the top of the status bar.  Crawls to ~80 % while
+// the server generates, then snaps to 100 % and fades out on completion.
+let _progressTimer = null;
+
+function startProgress() {
+  const bar = document.getElementById("briefing-progress");
+  const fill = document.getElementById("briefing-progress-fill");
+  if (!bar || !fill) return;
+  if (_progressTimer) { clearTimeout(_progressTimer); _progressTimer = null; }
+  // Reset cleanly before showing.
+  fill.style.animation = "none";
+  fill.style.transition = "none";
+  fill.style.opacity = "1";
+  fill.style.width = "0";
+  bar.hidden = false;
+  void fill.offsetWidth;  // flush so the reset takes effect before animation starts
+  // Animate to 80 % over 15 s; the slow-ease curve frontloads movement then crawls,
+  // giving honest feedback without implying a known completion time.
+  fill.style.animation = "uwx-progress 15s cubic-bezier(0.1,0.6,0.4,0.95) forwards";
+}
+
+function completeProgress() {
+  const bar = document.getElementById("briefing-progress");
+  const fill = document.getElementById("briefing-progress-fill");
+  if (!bar || !fill) return;
+  // Stop the indefinite crawl, snap to 100 %, then fade out.
+  fill.style.animation = "none";
+  void fill.offsetWidth;
+  fill.style.transition = "width 200ms ease, opacity 400ms ease 150ms";
+  fill.style.width = "100%";
+  fill.style.opacity = "0";
+  _progressTimer = setTimeout(() => {
+    bar.hidden = true;
+    fill.style.transition = "none";
+    fill.style.width = "0";
+    fill.style.opacity = "1";
+    _progressTimer = null;
+  }, 700);
+}
+
 /* ── Status / currency line (FR-39, FR-41) ─────────────────────────── */
 function renderStatus(b) {
   const gen = new Date(b.generated_at);
@@ -2520,6 +2606,7 @@ async function main() {
     if (cfg?.heat_labels) Object.assign(TIER_LABELS, cfg.heat_labels);
   } catch (_) { /* keep identity defaults */ }
   renderTabs();
+  renderLoadingState();
   initGlossaryInteractions();
   initPlannerControls();
   initSettingsControls();
@@ -2532,11 +2619,13 @@ async function main() {
   };
   const ackShown = maybeShowAck(promptFirstRun);
   let b;
+  startProgress();
   try {
     b = await loadBriefing(savedSpec() || DEFAULT_SPEC);
   } catch (e) {
     // A transient failure (server busy / gateway timeout / network) gets the retry banner so the
     // user can re-run without reloading the app; other errors show the inline explanation.
+    completeProgress();
     if (e && (e.retryable || e instanceof TypeError)) {
       showBusyBanner(savedSpec() || DEFAULT_SPEC);
     }
@@ -2546,6 +2635,7 @@ async function main() {
       `source is unavailable — please try again shortly.</p></section>`;
     return;
   }
+  completeProgress();
   const initialSpec = savedSpec() || DEFAULT_SPEC;
   renderAll(b);
   streamSummary(initialSpec);
