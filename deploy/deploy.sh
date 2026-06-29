@@ -62,6 +62,19 @@ if ! $RUN_USER "$DEPLOY_APP_DIR/.venv/bin/python" -c "import cfgrib" 2>/dev/null
     warn "cfgrib failed to import — check ecCodes (see deploy/README.md troubleshooting)"
 fi
 
+# Install Playwright's Chromium binary for server-side PDF export (FR-27, sitrep/pdf.py).
+# `playwright install chromium` is idempotent: it compares the installed build number
+# against the version baked into the Playwright Python package and only downloads when
+# they differ (~300 MB on first run; seconds on subsequent deploys).  The binary lives
+# at PLAYWRIGHT_BROWSERS_PATH (set in the systemd EnvironmentFile) so the service user
+# and the install step use the same location.
+PLAYWRIGHT_BROWSERS_DIR="$DEPLOY_APP_DIR/.playwright-browsers"
+log "ensuring Playwright Chromium is current (PDF export)"
+$RUN_USER env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_DIR" \
+    "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium \
+    || warn "playwright install chromium failed — PDF export endpoint will return 503"
+ok "Playwright Chromium ready at $PLAYWRIGHT_BROWSERS_DIR"
+
 # --- 3. Restart the service ----------------------------------------------------------
 log "restarting $DEPLOY_SERVICE"
 systemctl restart "$DEPLOY_SERVICE"

@@ -23,7 +23,14 @@ install_packages_apt() {
     apt-get update -qq
     apt-get install -y -qq \
         git curl ca-certificates build-essential \
-        nginx libeccodes0
+        nginx libeccodes0 \
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
+        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+        libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
+        fonts-liberation fonts-noto-color-emoji
+    # ↑ Chromium system libraries required by Playwright's headless Chromium (FR-27,
+    #   sitrep/pdf.py).  Playwright manages its own Chromium binary (deploy.sh does the
+    #   `playwright install chromium`); these are the host libs it links against.
     ok "apt packages installed"
 }
 
@@ -33,6 +40,10 @@ install_packages_dnf() {
     # ecCodes is not in the default Amazon Linux repos; the `eccodes` PyPI wheel bundles
     # the binary as a fallback. See deploy/README.md if cfgrib fails to import.
     "$PKG" install -y eccodes >/dev/null 2>&1 || warn "system eccodes unavailable — relying on the pip wheel"
+    # Chromium system libraries for server-side PDF export (FR-27).
+    "$PKG" install -y nss nspr atk at-spi2-atk cups-libs libdrm libXcomposite \
+        libXdamage libXrandr mesa-libgbm alsa-lib pango cairo >/dev/null 2>&1 \
+        || warn "some Chromium system libs unavailable — PDF export may fail on this host"
     ok "dnf packages installed"
 }
 
