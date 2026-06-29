@@ -71,23 +71,25 @@ fi
 PLAYWRIGHT_BROWSERS_DIR="$DEPLOY_APP_DIR/.playwright-browsers"
 log "ensuring Chromium is available for PDF export"
 # Install to two locations so the binary is found regardless of whether the running
-# service has PLAYWRIGHT_BROWSERS_PATH set (it may not, e.g. if the unit file predates
-# that env var or the __APP_DIR__ substitution failed on this host).
+# service has PLAYWRIGHT_BROWSERS_PATH set in its environment (it may not, if the unit
+# file predates that env var or the __APP_DIR__ substitution failed on this host).
 #
-# 1. Explicit PLAYWRIGHT_BROWSERS_PATH location (preferred, matches systemd unit).
-#    -H ensures HOME=$DEPLOY_APP_DIR so the default install path (fallback below) also
-#    lands under the app dir, not the invoking user's home.
+# Location 1: explicit PLAYWRIGHT_BROWSERS_PATH dir (matches the systemd unit template).
 $RUN_USER env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_DIR" \
     "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null \
     && ok "Playwright Chromium ready at $PLAYWRIGHT_BROWSERS_DIR" || true
-# 2. Default location ($HOME/.cache/ms-playwright) — used when PLAYWRIGHT_BROWSERS_PATH
-#    is absent from the running process.  -H sets HOME=$DEPLOY_APP_DIR, so this lands
-#    at $DEPLOY_APP_DIR/.cache/ms-playwright/ — exactly what Playwright looks for when
-#    the env var is unset.
-if $RUN_USER "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null; then
-    ok "Playwright Chromium also ready at $DEPLOY_APP_DIR/.cache/ms-playwright"
+# Location 2: default $HOME/.cache/ms-playwright — used when PLAYWRIGHT_BROWSERS_PATH is
+# absent from the running process.  -H sets HOME=$DEPLOY_APP_DIR (via sudo -H in RUN_USER)
+# so the install lands at $DEPLOY_APP_DIR/.cache/ms-playwright/, exactly where Playwright
+# looks when the env var is unset.
+$RUN_USER "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null \
+    && ok "Playwright Chromium also ready at $DEPLOY_APP_DIR/.cache/ms-playwright" || true
+# Install OS-level shared library dependencies the headless shell requires (libatk, libglib,
+# libx11, etc.).  Must run as root so apt-get can install system packages.  Safe to re-run.
+if "$DEPLOY_APP_DIR/.venv/bin/playwright" install-deps chromium 2>/dev/null; then
+    ok "Playwright system deps installed"
 else
-    warn "playwright install chromium failed (unsupported distro?) — falling back to Google Chrome"
+    warn "playwright install-deps chromium failed (unsupported distro?) — falling back to Google Chrome"
     # Ubuntu 22.04+ ships Chromium as a snap package only.  Snap processes need a user
     # session (XDG_RUNTIME_DIR, snap home dir) that don't exist for a system service
     # account, so the snap wrapper always fails in this context.  Google Chrome ships a
