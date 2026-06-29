@@ -48,7 +48,10 @@ load_config() {
     # page (deploy/nginx/landing.conf). DEPLOY_APP_SERVER_NAME falls back to the legacy
     # single DEPLOY_SERVER_NAME so an existing staging config keeps working unchanged.
     : "${DEPLOY_APP_SERVER_NAME:=${DEPLOY_SERVER_NAME:-app.upstreamwx.com}}"
-    : "${DEPLOY_LANDING_SERVER_NAME:=upstreamwx.com www.upstreamwx.com}"
+    # Landing is OPT-IN: empty by default so no environment (staging, a fresh box, an old
+    # config.env) accidentally stands up the apex site. The names come from the env file —
+    # config.env.example sets prod's; config.staging.env.example sets "" (app-only).
+    : "${DEPLOY_LANDING_SERVER_NAME:=}"
     : "${DEPLOY_LANDING_ROOT:=${DEPLOY_APP_DIR}/landing}"
     : "${DEPLOY_SERVICE:=upstreamwx-api}"
 }
