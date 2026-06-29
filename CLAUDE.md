@@ -74,10 +74,11 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     structured.py          BriefingResult+bundle -> the PWA's structured JSON contract (M0.4)
     hazard_copy.py         static per-hazard threshold-logic copy for the Hazards view (FR-20)
     frame.py               optional Claude Haiku framing (no-posture-change)
+    pdf.py                 server-side PDF export: render_pdf(briefing) -> bytes via headless Chromium/Playwright (FR-27)
     sources.py             verify-against-NWS source links
     cli.py                 `upstreamwx` console entry
   api/                   M0.3 FastAPI service (`upstreamwx-api`)
-    app.py                 POST /v1/briefing, POST /v1/watershed/warm, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler + warm pool
+    app.py                 POST /v1/briefing, POST /v1/briefing/pdf, POST /v1/watershed/warm, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler + warm pool
     service.py             BriefingService (cache-aware generation + active-mission refresh + background watershed warming)
     cache.py               BriefingCache (keyed by location/window/activity, valid one SREF cycle)
     cycles.py              pure SREF-cycle arithmetic (03/09/15/21Z)
@@ -90,7 +91,7 @@ tests/                   hermetic suite + committed fixtures + validation corpus
   gen_sitrep_goldens.py    regenerate golden files after an intentional render change
 frontend/                static PWA (M0.4); fetches POST /v1/briefing; STYLE_GUIDE.md is the visual source of truth
   data/sample-briefing.json  the frozen structured contract; rendered ONLY in demo mode (GitHub Pages host or ?demo) — production never falls back to it
-  pdf/briefing-pdf.html      print-optimized PDF export template (FR-27); app hands the live briefing via localStorage + ?print=1 (render-example.mjs renders a worked example headless)
+  pdf/briefing-pdf.html      print-optimized PDF export template (FR-27); rendered server-side by sitrep/pdf.py via headless Chromium; client falls back to localStorage + ?print=1 when offline
 docs/m0.0../m0.4/        per-milestone findings + spike reports — read these for "why"
 .claude/hooks/           SessionStart hook that installs deps in the web environment
 ```
@@ -275,14 +276,14 @@ ephemeral container): the recurring SREF scheduler **cadence** and the
 processing, cache semantics, cycle arithmetic, a single refresh pass) are built and
 tested. **M0.5** (flesh out the PWA — offline cache timestamp UX FR-26/41, remaining
 timeline polish) is in progress; `STYLE_GUIDE.md` is the visual source of truth. **PDF
-export (FR-27)** is built: the Resources view's Export button stashes the structured
-briefing in `localStorage` and navigates the current tab to
-`frontend/pdf/briefing-pdf.html?print=1` (single-tab on purpose — iOS traps print
-popups; the template offers a Back control), a
-print-optimized light-theme template that renders the briefing (BLUF, hazard table,
-phase breakdown, hourly forecast, drivers/threshold logic, source drill-down) and
-triggers Save-as-PDF, carrying the §17.3 reference-only footer on every page. The
-template and its logo are precached by `sw.js`, so export works offline.
+export (FR-27)** is built server-side: `POST /v1/briefing/pdf` accepts the structured
+`BriefingResponse` the PWA already holds in memory, renders `frontend/pdf/briefing-pdf.html`
+via headless Chromium (Playwright, `sitrep/pdf.py`) with `window.__BRIEFING__` injected as
+an init script, and returns a clean `application/pdf` download — no browser URL chrome, no
+iOS print-preview trap. The client falls back to the localStorage → `?print=1` path when
+offline or the server endpoint is unavailable. The print template (light-theme, US Letter,
+running §17.3 reference-only footer in every page's `<tfoot>`) is precached by `sw.js`
+so the fallback path still works offline.
 
 **Domain split (app subdomain + static landing).** The app (PWA + `/v1/*`, still
 single-origin) now lives at **`app.upstreamwx.com`**; the apex **`upstreamwx.com`** (+ `www`)
