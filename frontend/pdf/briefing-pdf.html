@@ -26,10 +26,14 @@
      US Letter with a running footer reserved on every page. */
   @page {
     size: Letter;
-    /* Wider side margins (≈0.71") than top/bottom: content was running flush to
-       a 0.55" edge, so any printer drift / non-printable border clipped the
-       right side. The extra horizontal slack keeps nothing near the paper edge. */
-    margin: 14mm 18mm;
+    /* Zero TOP/BOTTOM margins so the browser's own print chrome (URL, date,
+       "Page x of y") has no margin box to render into and is suppressed. The
+       page's real top margin and the reference-only footer are supplied
+       in-document by the layout table's <thead> spacer and repeating <tfoot>
+       (see Pagination below), which print on every page in every engine —
+       including iOS Safari, where position:fixed footers do NOT repeat.
+       Side margins (≈0.71") stay here for horizontal breathing room. */
+    margin: 0 18mm;
   }
 
   :root {
@@ -259,27 +263,26 @@
   }
 
   /* ── Pagination ───────────────────────────────────────────────────────── */
-  .page-break-before { break-before: page; }
+  .page-break-before { break-before: page; page-break-before: always; }
+  .section__head { break-after: avoid; page-break-after: avoid; } /* never orphan a heading */
 
-  /* ── Reference-only running footer (§17.3, FR-29/FR-40) ───────────────────
-     The classic robust repeating-footer technique, chosen because it works in
-     BOTH the live window.print() path and headless page.pdf():
-       · the content is wrapped in a <table class="layout">;
-       · a <tfoot> with a fixed-height spacer (.foot-reserve) is repeated by the
-         browser at the bottom of EVERY printed page, reserving the footer's
-         height so no content can flow under it (this is what overlapped before);
-       · the actual footer (.page-foot) is position:fixed at the page-area
-         bottom, so it is painted on every page, overlaying the reserved band. */
+  /* ── Running margins + reference-only footer (§17.3, FR-29/FR-40) ──────────
+     All content is wrapped in <table class="layout">. Browsers repeat a table's
+     <thead> and <tfoot> on EVERY printed page — including iOS Safari, which does
+     not repeat position:fixed elements. So:
+       · <thead> holds a spacer (.run-top) = the top page margin, every page;
+       · <tfoot> holds the actual footer (.page-foot) = the disclaimer, every
+         page, with padding-bottom = the bottom page margin.
+     This is why the footer now prints on every page instead of floating once. */
   .layout { width: 100%; border-collapse: collapse; }
-  .layout > tbody > tr > td, .layout > tfoot > tr > td { padding: 0; }
-  .foot-reserve { height: 10mm; }
+  .layout > thead > tr > td, .layout > tbody > tr > td { padding: 0; }
+  .layout > tfoot > tr > td { padding: 0 0 9mm; }   /* bottom page margin below footer */
+  .run-top { height: 10mm; }                        /* top page margin, every page */
 
   .page-foot {
-    position: fixed; bottom: 0; left: 0; right: 0;
     display: flex; align-items: flex-end; justify-content: space-between; gap: 14px;
-    border-top: 1.5px solid var(--p-brand); padding-top: 4px;
-    font-size: 7pt; line-height: 1.4; color: var(--p-ink-2);
-    background: var(--p-bg);
+    margin-top: 5mm; border-top: 1.5px solid var(--p-brand); padding-top: 4px;
+    font-size: 7pt; line-height: 1.35; color: var(--p-ink-2);
   }
   .page-foot__note { max-width: 158mm; }
   .page-foot__note strong { color: var(--p-ink); }
@@ -290,6 +293,9 @@
     html, body { background: #fff; }
     .sheet { width: auto; min-height: 0; margin: 0; padding: 0; box-shadow: none; }
     .no-print { display: none !important; }
+  }
+  @media screen {
+    .run-top { height: 0; }   /* the screen .sheet already pads the top */
   }
 
   /* Screen-only toolbar */
@@ -526,10 +532,9 @@ function renderHazardDetail(b) {
     ${h.assumptions.map((a) => `<div class="hz-detail__assume">${esc(a)}</div>`).join("")}
     <div class="hz-detail__logic">${esc(displayLogic(h.logic))}</div>
   </div>`).join("");
-  // This section flows onto page 2: page 1 fills through the forecast, leaving
-  // no room here, so the drivers cards naturally begin the second page. The
-  // .section--break keeps each card intact across the break.
-  return `<div class="section">
+  // Force this section to start a fresh page so its heading is never orphaned
+  // at the bottom of page 1 with the cards pushed to page 2.
+  return `<div class="section page-break-before">
     <div class="section__head">Key drivers &amp; threshold logic</div>
     ${cards}
   </div>`;
@@ -608,14 +613,15 @@ function render(b) {
     renderForecast(b) +
     renderHazardDetail(b) +
     renderSourceData(b);
-  // Wrap in a layout table whose <tfoot> reserves the footer band on every
-  // printed page; the fixed .page-foot is painted over that band per page.
+  // Wrap in a layout table: <thead> spacer = top margin, <tfoot> = the footer.
+  // Both repeat on every printed page (Safari-safe), so the footer prints
+  // per page instead of floating once.
   document.getElementById("sheet").innerHTML =
     `<table class="layout">
+       <thead><tr><td><div class="run-top"></div></td></tr></thead>
        <tbody><tr><td>${content}</td></tr></tbody>
-       <tfoot><tr><td><div class="foot-reserve"></div></td></tr></tfoot>
+       <tfoot><tr><td>${renderPageFoot(b)}</td></tr></tfoot>
      </table>`;
-  document.body.insertAdjacentHTML("beforeend", renderPageFoot(b));
 }
 
 /* The app hands off the live briefing through localStorage (one-shot, read and
