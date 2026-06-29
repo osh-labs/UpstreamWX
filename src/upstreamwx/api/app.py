@@ -91,12 +91,18 @@ app = FastAPI(
 
 @app.get("/v1/health")
 def health() -> dict:
-    """Liveness probe plus the current/next refresh cycle, cache size, and release.
+    """Liveness probe plus the current/next refresh cycle, cache size, release, and limits.
 
     ``release`` is the deployed version stamped into ``frontend/version.json`` by
     ``deploy/deploy.sh`` (docs/deployment-workflow.md). It makes "what's running" knowable
     from a curl — the field an uptime check and a rollback both want to confirm.
+
+    ``limits`` echoes the effective runtime resource controls so "what is this box actually
+    configured to do" is a one-curl check instead of sourcing the env file. ``decode_pool`` is
+    the *actual* installed state (reflects the opt-in setting and any broken-pool fallback), not
+    just the configured flag.
     """
+    settings = get_settings()
     return {
         "status": "ok",
         "release": _release(),
@@ -104,6 +110,14 @@ def health() -> dict:
         "next_cycle": next_cycle().isoformat(),
         "cached_briefings": len(service.cache),
         "active_missions": service.active_count,
+        "limits": {
+            "decode_pool": grib_cache.decode_pool_enabled(),
+            "decode_pool_workers": settings.decode_pool_workers,
+            "decode_cache_max_bytes": settings.decode_cache_max_bytes,
+            "briefing_max_concurrency": settings.briefing_max_concurrency,
+            "briefing_busy_timeout_s": settings.briefing_busy_timeout_s,
+            "gefs_warm_fhours": len(settings.gefs_warm_fhours),
+        },
     }
 
 

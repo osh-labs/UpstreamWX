@@ -67,6 +67,18 @@ def test_health(client):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["cycle"].endswith("Z")
+    # Effective runtime limits are echoed for one-curl ops visibility.
+    limits = body["limits"]
+    assert set(limits) == {
+        "decode_pool",
+        "decode_pool_workers",
+        "decode_cache_max_bytes",
+        "briefing_max_concurrency",
+        "briefing_busy_timeout_s",
+        "gefs_warm_fhours",
+    }
+    assert isinstance(limits["decode_pool"], bool)
+    assert isinstance(limits["decode_cache_max_bytes"], int)
 
 
 def test_briefing_offline_inputs(client):
