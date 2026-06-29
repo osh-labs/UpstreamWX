@@ -65,7 +65,7 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     orchestrator.py        mission -> trace -> bundle -> HazardInputs
   grib/                  shared GRIB2 .idx byte-range subsetting + polygon zonal aggregation (used by gefs + refs)
   gefs/                  GEFS global ensemble processor — per-member grids, in-house member-exceedance (SREF replacement)
-  refs/                  REFS ~3 km same-day supplement (~6-36 h), reuses grib/ — AWS rrfs_a enspost NEP (HREF replacement)
+  refs/                  REFS ~3 km same-day supplement (~6-36 h), reuses grib/ — HREF replacement; feed is configurable (refs_source: aws prototype / nomads_para / nomads_prod), prod = com/refs/prod ensprod NEP (SCN 26-48)
   sref/, href/           retired SREF/HREF packages — no longer wired; kept for the M0.0 spikes (post-cutover cleanup deletes them)
   watershed/             HUC-12 resolution + upstream trace + pour-point delineation + on-disk cache — Spike B/D
     cache.py               disk cache for trace/pour-point basins + single-flight registry (warm & briefing coalesce on one trace)

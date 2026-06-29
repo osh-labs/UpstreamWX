@@ -6,23 +6,27 @@ terminated 2026-08-31 12Z (NWS SCN 26-47). UpstreamWX uses REFS to sharpen the
 **same-day (~36 h)** flash-flood and lightning signal that GEFS carries at coarse
 global scale; GEFS owns the longer planning horizon. See PRD §6.2 FR-7a, §16.1/§16.2.
 
-Findings from Spike E source discovery (2026-06-29, docs/m0.0/spike-e-refs-report.md):
+**Source feeds (NWS SCN 26-48).** The REFS feed is selectable via ``refs_source`` (see
+:data:`REFS_FEEDS` and :func:`refs_feed`); the directory/filename layout is identical across
+feeds, only the base host and the ensemble-product subdir differ:
 
-* **No NOMADS ``com/`` path** carries REFS. The authoritative public real-time feed is
-  the **AWS** open-data bucket ``noaa-rrfs-pds``::
+      <base>/refs.YYYYMMDD/CC/<subdir>/refs.tCCz.<product>.fFF.<domain>.grib2(.idx)
 
-      https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a/
-          refs.YYYYMMDD/HH/enspost/refs.tHHz.<product>.fFH.<domain>.grib2(.idx)
+* **Production (authoritative, live 2026-08-31 12Z):**
+  ``https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod`` + subdir ``ensprod``.
+* **Pre-implementation parallel (since ~2026-06-09):** ``…/com/refs/para`` + ``ensprod``.
+* **AWS RRFS *prototype* bucket (default pre-cutover, the only feed validated end-to-end in
+  the build container):** ``https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a`` + subdir ``enspost``.
 
-  (``rrfs_a/`` is the operational-parallel stream; ``rrfs_public/`` mirrors it.) The
-  fetch is a plain ranged GET, so the shared :mod:`upstreamwx.grib.idx` machinery applies
-  unchanged — only the URL builder differs from HREF.
-* REFS runs **4 cycles/day at 00/06/12/18 UTC** (vs HREF's two). Member tag in the idx is
-  ``0/14`` (15 members).
+Other findings from Spike E (2026-06-29, docs/m0.0/spike-e-refs-report.md):
+
+* REFS runs **4 cycles/day at 00/06/12/18 UTC** (vs HREF's two). The AWS prototype's idx member
+  tag was ``0/14`` (15); operational membership (SCN 26-48: 5 RRFS + 2 HRRR, time-lagged) may
+  differ — irrelevant here, the precomputed ``prob`` NEP is member-count-agnostic.
 * **One file per forecast hour per domain** (``conus``/``ak``/``hi``/``pr``), like HREF,
   but on a **3-hourly cadence**: products at **f03-f48 every 3 h, then to f60 every 6 h**
   (vs HREF's hourly f01-f48). :data:`REFS_FHOURS` enumerates the available hours.
-* The ``enspost`` ``prob`` product is a **Neighborhood Ensemble Probability (NEP)** field,
+* The ``prob`` product is a **Neighborhood Ensemble Probability (NEP)** field,
   byte-compatible with HREF's descriptor grammar — the ``accum_window`` convention is shared.
   It carries exactly what the two REFS-relevant hazards need:
     - ``APCP``  — neighborhood P(1h/3h/6h/run-total precip > mm thresholds) → flash flood.
@@ -40,22 +44,42 @@ from datetime import UTC, datetime, timedelta
 
 import requests
 
+from ..config import Settings, get_settings
 from ..grib.idx import _HEADERS
 
-AWS_BASE = "https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a"
 REFS_CYCLES = (0, 6, 12, 18)  # UTC hours
 DEFAULT_DOMAIN = "conus"  # ~3 km Lambert CONUS grid (separate AK/HI/PR domains exist)
-DEFAULT_PRODUCT = "prob"  # enspost Neighborhood Ensemble Probability
+DEFAULT_PRODUCT = "prob"  # ensemble-product NEP (Neighborhood Ensemble Probability)
 MAX_FHOUR = 60  # CONUS horizon; UpstreamWX leans on ≲36 h per product intent (FR-7a)
 
 # Available forecast hours: f03-f48 every 3 h, then to f60 every 6 h (REFS cadence).
 REFS_FHOURS: tuple[int, ...] = tuple(range(3, 49, 3)) + (54, 60)
 PRODUCTS = ("prob", "mean", "pmmn", "lpmm", "sprd", "avrg", "eas", "ffri")
 
+# REFS source feeds (NWS SCN 26-48): (base URL, ensemble-product subdir). The directory and
+# filename layout below is identical across feeds — only the host/base and the subdir differ
+# (the AWS prototype bucket uses ``enspost``; the NOMADS production paths use ``ensprod``).
+REFS_FEEDS: dict[str, tuple[str, str]] = {
+    "aws": ("https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a", "enspost"),
+    "nomads_para": ("https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/para", "ensprod"),
+    "nomads_prod": ("https://nomads.ncep.noaa.gov/pub/data/nccf/com/refs/prod", "ensprod"),
+}
+
+
+def refs_feed(settings: Settings | None = None) -> tuple[str, str]:
+    """Resolve the active REFS ``(base_url, subdir)`` from settings.
+
+    ``refs_source`` selects a profile in :data:`REFS_FEEDS`; ``refs_base_url`` / ``refs_subdir``
+    raw overrides take precedence. See :mod:`upstreamwx.config` for the cutover note.
+    """
+    settings = settings or get_settings()
+    base, subdir = REFS_FEEDS[settings.refs_source]
+    return (settings.refs_base_url or base, settings.refs_subdir or subdir)
+
 
 @dataclass(frozen=True)
 class RefsCycle:
-    """Identifies one REFS model cycle on the AWS mirror."""
+    """Identifies one REFS model cycle (feed-agnostic; URLs resolve the active feed)."""
 
     date: str  # YYYYMMDD (UTC)
     hour: int  # one of REFS_CYCLES
@@ -68,18 +92,24 @@ class RefsCycle:
     def init_time(self) -> datetime:
         return datetime.strptime(f"{self.date}{self.hh}", "%Y%m%d%H").replace(tzinfo=UTC)
 
-    def enspost_dir(self) -> str:
-        return f"{AWS_BASE}/refs.{self.date}/{self.hh}/enspost"
+    def ensprod_dir(self, base: str | None = None, subdir: str | None = None) -> str:
+        """``{base}/refs.{date}/{cc}/{subdir}`` — the cycle's ensemble-product directory."""
+        if base is None or subdir is None:
+            fb, fs = refs_feed()
+            base, subdir = base or fb, subdir or fs
+        return f"{base}/refs.{self.date}/{self.hh}/{subdir}"
 
     def product_url(
         self,
         fhour: int,
         product: str = DEFAULT_PRODUCT,
         domain: str = DEFAULT_DOMAIN,
+        base: str | None = None,
+        subdir: str | None = None,
     ) -> str:
-        """URL of an enspost GRIB2 product file for one forecast hour."""
+        """URL of an ensemble-product GRIB2 file for one forecast hour (SCN 26-48 scheme)."""
         fname = f"refs.t{self.hh}z.{product}.f{fhour:02d}.{domain}.grib2"
-        return f"{self.enspost_dir()}/{fname}"
+        return f"{self.ensprod_dir(base, subdir)}/{fname}"
 
     def idx_url(self, fhour: int, **kw: str) -> str:
         return self.product_url(fhour, **kw) + ".idx"
@@ -118,24 +148,30 @@ def latest_available_cycle(
     max_back: int = 6,
     probe_fhour: int = 3,
     domain: str = DEFAULT_DOMAIN,
+    *,
+    settings: Settings | None = None,
 ) -> RefsCycle | None:
-    """Return the newest REFS cycle whose ``prob`` product is live on the AWS mirror.
+    """Return the newest REFS cycle whose ``prob`` product is live on the active feed.
 
     Accounts for production lag (a cycle's files appear well after its init time) by probing
     recent cycles newest-first. Probes a low forecast hour (f03, the first REFS output) as the
-    cycle's readiness anchor.
+    cycle's readiness anchor. The feed (AWS / NOMADS) is resolved once via :func:`refs_feed`.
     """
+    base, subdir = refs_feed(settings)
     for cycle in iter_recent_cycles(now=now, count=max_back):
-        if _exists(cycle.product_url(probe_fhour, product="prob", domain=domain)):
+        if _exists(
+            cycle.product_url(probe_fhour, product="prob", domain=domain, base=base, subdir=subdir)
+        ):
             return cycle
     return None
 
 
 def probe_sources(now: datetime | None = None, max_back: int = 6) -> dict:
-    """Diagnostic probe: availability of recent cycles on the AWS mirror."""
-    report: dict = {"aws_base": AWS_BASE, "cycles": []}
+    """Diagnostic probe: availability of recent cycles on the active feed."""
+    base, subdir = refs_feed()
+    report: dict = {"base": base, "subdir": subdir, "cycles": []}
     for cycle in iter_recent_cycles(now=now, count=max_back):
-        url = cycle.product_url(3, product="prob")
+        url = cycle.product_url(3, product="prob", base=base, subdir=subdir)
         report["cycles"].append(
             {
                 "cycle": f"{cycle.date}/{cycle.hh}Z",

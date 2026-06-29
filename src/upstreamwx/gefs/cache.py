@@ -22,7 +22,7 @@ from ..config import Settings, get_settings
 from ..grib.cache import cached_subset, decode_cached, prune_cycle_dirs
 from ..grib.idx import download_subset, fetch_idx, select_messages
 from .extract import GefsField, _primary_dataarray, open_subset
-from .sources import DEFAULT_SET, GEFS_CYCLES, MEMBERS, GefsCycle
+from .sources import DEFAULT_SET, GEFS_CYCLES, MEMBERS, GefsCycle, gefs_base
 
 logger = logging.getLogger("upstreamwx.gefs.cache")
 
@@ -90,11 +90,12 @@ def load_member_field_cached(
     """
     settings = settings or get_settings()
     path = _cycle_dir(settings, cycle) / _subset_name(member, fhour, var, level)
+    base = gefs_base(settings)  # honor gefs_base_url override consistently
 
     path, selected = cached_subset(
         path,
-        idx_url=cycle.idx_url(member, fhour, res_set),
-        grib_url=cycle.member_url(member, fhour, res_set),
+        idx_url=cycle.idx_url(member, fhour, res_set, base),
+        grib_url=cycle.member_url(member, fhour, res_set, base),
         select=lambda entries: select_messages(entries, var=var, fcst=fcst, level=level),
         refresh=refresh,
         what=f"{member} f{fhour:03d} var={var!r} level={level!r} fcst={fcst!r}",

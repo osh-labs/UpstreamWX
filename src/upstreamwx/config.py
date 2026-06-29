@@ -8,6 +8,7 @@ without rework.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -31,11 +32,23 @@ class Settings(BaseSettings):
     # override for a packaged deployment, or to "" to disable static serving entirely.
     frontend_dir: Path | None = None
 
-    # Optional override for the GEFS source base URL (NOMADS gens/prod; SREF replacement).
+    # Optional override for the GEFS source base URL (default: NOMADS gens/prod, the operational
+    # GEFS endpoint; SREF replacement). Rarely needed — GEFS is already on its production path.
     gefs_base_url: str | None = None
 
-    # Optional override for the REFS source base URL (AWS rrfs_a; HREF replacement).
+    # REFS source feed (HREF replacement, NWS SCN 26-48). Selects the (base URL, ensemble-product
+    # subdir) pair the REFS provider reads:
+    #   "aws"         -> noaa-rrfs-pds/rrfs_a + "enspost"  (RRFS *prototype* bucket; validated)
+    #   "nomads_para" -> com/refs/para       + "ensprod"  (NOMADS pre-implementation parallel)
+    #   "nomads_prod" -> com/refs/prod       + "ensprod"  (NOMADS production, live 2026-08-31 12Z)
+    # CUTOVER: flip this to "nomads_prod" once the NOMADS REFS feed is confirmed reachable and its
+    # ``ensprod`` layout validated from a network-unrestricted host. Default "aws" is the only feed
+    # reachable for end-to-end validation pre-cutover.
+    refs_source: Literal["aws", "nomads_para", "nomads_prod"] = "aws"
+    # Raw overrides (take precedence over ``refs_source``); leave None to use the profile above.
     refs_base_url: str | None = None
+    # Ensemble-product subdir override ("enspost" on AWS, "ensprod" on NOMADS).
+    refs_subdir: str | None = None
 
     # The NWS API (api.weather.gov) requires a self-identifying User-Agent with a
     # contact (FR-5). Override via UPSTREAMWX_NWS_USER_AGENT to your own contact.

@@ -103,3 +103,25 @@ reads real signal, not zeros. Values are valid probabilities in [0, 100].
 .venv/bin/python spikes/spike_e_refs/run_spike_e.py \
     --polygon tests/fixtures/buckskin_huc12.geojson --fhour 12
 ```
+
+## Addendum (2026-06-29) — production endpoint vs the validated prototype
+
+The spike validated REFS against the **AWS RRFS "[Prototype]" bucket** (`noaa-rrfs-pds/rrfs_a`,
+subdir `enspost`) — the only REFS feed reachable for end-to-end validation in the build container.
+**SCN 26-48** (the RRFS/REFS *implementation* notice) gives the authoritative NOMADS paths:
+
+| Feed | Base | Subdir | Status |
+| --- | --- | --- | --- |
+| **Production** | `…/com/refs/prod/` | **`ensprod`** | authoritative, live 2026-08-31 12Z |
+| **Pre-impl. parallel** | `…/com/refs/para/` | **`ensprod`** | since ~2026-06-09 |
+| AWS prototype (validated here) | `noaa-rrfs-pds/rrfs_a/` | **`enspost`** | dev/validation default |
+
+Layout is otherwise identical: `refs.YYYYMMDD/CC/<subdir>/refs.tCCz.<type>.fFF.<dom>.grib2`,
+`type∈{mean,sprd,pmmn,lpmm,avrg,prob,eas}` (+ `ffri`, conus-only), `dom∈{conus,ak,hi,pr}`, cycles
+00/06/12/18, to f60 — matching what the provider selects. **The one real difference is the subdir
+(`enspost` → `ensprod`) plus the host.** The provider therefore reads its feed from config
+(`refs_source`, default `aws`); flip to `nomads_prod` at cutover. The NOMADS `refs/{para,prod}`
+paths returned **HTTP 403 from the build container** (egress policy / not-yet-serving), so the
+`ensprod` layout must be confirmed from a network-unrestricted host before the default is changed.
+Operational membership (5 RRFS + 2 HRRR, time-lagged) may differ from the prototype's idx tag
+`0/14` — immaterial, since we read the precomputed `prob` NEP, not individual members.

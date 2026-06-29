@@ -2,17 +2,19 @@
 
 The briefing is reference-only: every render carries links back to the authoritative
 NWS products and the model source so a trip leader can verify (PRD §15, Appendix A).
-The point links are built here; the model-source links reuse the feed bases already
-defined by the GEFS/REFS source modules so there is a single source of truth. (GEFS and
-REFS replace SREF and HREF after the 2026-08-31 EOL, NWS SCN 26-47.)
+The model-source links point at NCEP's authoritative **product documentation pages**
+(not the raw data feed the backend happens to read — which may be the AWS prototype
+pre-cutover), so the "verify" target is stable and reachable regardless of feed. (GEFS and
+REFS replace SREF and HREF after the 2026-08-31 EOL, NWS SCN 26-47/26-48.)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..gefs.sources import NOMADS_BASE as GEFS_NOMADS_BASE
-from ..refs.sources import AWS_BASE as REFS_AWS_BASE
+# Authoritative NCEP product pages (stable, human-facing) for the verify-against links.
+GEFS_PRODUCT_PAGE = "https://www.nco.ncep.noaa.gov/pmb/products/gens"
+REFS_PRODUCT_PAGE = "https://www.nco.ncep.noaa.gov/pmb/products/refs"
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,6 @@ def build_source_links(lat: float, lon: float, *, used_refs: bool = False) -> So
     return SourceLinks(
         active_alerts=f"https://api.weather.gov/alerts/active?point={lat:.4f},{lon:.4f}",
         nws_point_forecast=f"https://forecast.weather.gov/MapClick.php?lat={lat:.4f}&lon={lon:.4f}",
-        gefs_model=GEFS_NOMADS_BASE,
-        refs_model=REFS_AWS_BASE if used_refs else None,
+        gefs_model=GEFS_PRODUCT_PAGE,
+        refs_model=REFS_PRODUCT_PAGE if used_refs else None,
     )

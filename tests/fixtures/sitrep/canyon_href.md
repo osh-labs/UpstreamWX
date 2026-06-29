@@ -99,8 +99,8 @@ Source availability:
 
 - NWS active alerts: https://api.weather.gov/alerts/active?point=37.0192,-111.9889
 - NWS point forecast / AFD: https://forecast.weather.gov/MapClick.php?lat=37.0192&lon=-111.9889
-- Model source (GEFS): https://nomads.ncep.noaa.gov/pub/data/nccf/com/gens/prod
-- Model source (REFS, same-day): https://noaa-rrfs-pds.s3.amazonaws.com/rrfs_a
+- Model source (GEFS): https://www.nco.ncep.noaa.gov/pmb/products/gens
+- Model source (REFS, same-day): https://www.nco.ncep.noaa.gov/pmb/products/refs
 
 ## DISCLAIMER
 

@@ -30,11 +30,18 @@ from datetime import UTC, datetime, timedelta
 
 import requests
 
+from ..config import Settings, get_settings
 from ..grib.idx import _HEADERS
 
+# Operational GEFS endpoint (the long-standing production path; no SCN 26-48 change for GEFS).
 NOMADS_BASE = "https://nomads.ncep.noaa.gov/pub/data/nccf/com/gens/prod"
 GEFS_CYCLES = (0, 6, 12, 18)  # UTC hours
 DEFAULT_SET = "0p25"  # pgrb2sp25 select subset; ~25 km, carries APCP + CAPE
+
+
+def gefs_base(settings: Settings | None = None) -> str:
+    """Resolve the GEFS base URL: the ``gefs_base_url`` override, else operational NOMADS."""
+    return (settings or get_settings()).gefs_base_url or NOMADS_BASE
 # Control + 30 perturbed members (31 total).
 MEMBERS: tuple[str, ...] = ("gec00",) + tuple(f"gep{n:02d}" for n in range(1, 31))
 
@@ -60,16 +67,20 @@ class GefsCycle:
     def init_time(self) -> datetime:
         return datetime.strptime(f"{self.date}{self.hh}", "%Y%m%d%H").replace(tzinfo=UTC)
 
-    def atmos_dir(self, res_set: str = DEFAULT_SET) -> str:
+    def atmos_dir(self, res_set: str = DEFAULT_SET, base: str | None = None) -> str:
         subdir = SETS[res_set][0]
-        return f"{NOMADS_BASE}/gefs.{self.date}/{self.hh}/atmos/{subdir}"
+        return f"{base or gefs_base()}/gefs.{self.date}/{self.hh}/atmos/{subdir}"
 
-    def member_url(self, member: str, fhour: int, res_set: str = DEFAULT_SET) -> str:
+    def member_url(
+        self, member: str, fhour: int, res_set: str = DEFAULT_SET, base: str | None = None
+    ) -> str:
         infix = SETS[res_set][1]
-        return f"{self.atmos_dir(res_set)}/{member}.t{self.hh}z.{infix}.f{fhour:03d}"
+        return f"{self.atmos_dir(res_set, base)}/{member}.t{self.hh}z.{infix}.f{fhour:03d}"
 
-    def idx_url(self, member: str, fhour: int, res_set: str = DEFAULT_SET) -> str:
-        return self.member_url(member, fhour, res_set) + ".idx"
+    def idx_url(
+        self, member: str, fhour: int, res_set: str = DEFAULT_SET, base: str | None = None
+    ) -> str:
+        return self.member_url(member, fhour, res_set, base) + ".idx"
 
 
 def _exists(url: str, timeout: float | tuple[float, float] = (8.0, 15.0)) -> bool:

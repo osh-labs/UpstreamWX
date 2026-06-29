@@ -29,7 +29,7 @@ from ..config import Settings, get_settings
 from ..grib.cache import cached_subset, decode_cached, prune_cycle_dirs
 from .extract import RefsField, _primary_dataarray, accum_window, open_subset
 from .fetch import download_subset, fetch_idx, select_messages
-from .sources import DEFAULT_DOMAIN, DEFAULT_PRODUCT, REFS_FHOURS, RefsCycle
+from .sources import DEFAULT_DOMAIN, DEFAULT_PRODUCT, REFS_FHOURS, RefsCycle, refs_feed
 
 logger = logging.getLogger("upstreamwx.refs.cache")
 
@@ -115,11 +115,13 @@ def load_probability_field_cached(
     """
     settings = settings or get_settings()
     path = _cycle_dir(settings, cycle) / _subset_name(fhour, var, prob)
+    # Resolve the active feed (AWS / NOMADS) once so the cache write and any live probe agree.
+    base, subdir = refs_feed(settings)
 
     path, selected = cached_subset(
         path,
-        idx_url=cycle.idx_url(fhour, product=product, domain=domain),
-        grib_url=cycle.product_url(fhour, product=product, domain=domain),
+        idx_url=cycle.idx_url(fhour, product=product, domain=domain, base=base, subdir=subdir),
+        grib_url=cycle.product_url(fhour, product=product, domain=domain, base=base, subdir=subdir),
         select=lambda entries: select_messages(entries, var=var, prob=prob, fcst=fcst),
         refresh=refresh,
         what=f"f{fhour:02d} var={var!r} prob={prob!r} fcst={fcst!r}",

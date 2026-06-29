@@ -63,7 +63,7 @@ Source field detail unavailable (rendered from engine result only).
 
 - NWS active alerts: https://api.weather.gov/alerts/active?point=37.0000,-112.0000
 - NWS point forecast / AFD: https://forecast.weather.gov/MapClick.php?lat=37.0000&lon=-112.0000
-- Model source (GEFS): https://nomads.ncep.noaa.gov/pub/data/nccf/com/gens/prod
+- Model source (GEFS): https://www.nco.ncep.noaa.gov/pmb/products/gens
 
 ## DISCLAIMER
 
