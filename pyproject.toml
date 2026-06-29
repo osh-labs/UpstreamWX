@@ -33,6 +33,8 @@ dependencies = [
     # M0.3 API: always-on briefing service on the existing EC2 (PRD §7).
     "fastapi",
     "uvicorn[standard]",
+    # Server-side PDF export (FR-27): headless Chromium renders briefing-pdf.html.
+    "playwright",
 ]
 
 [project.scripts]
