@@ -33,6 +33,24 @@ from .sources import DEFAULT_DOMAIN, DEFAULT_PRODUCT, REFS_FHOURS, RefsCycle, re
 
 logger = logging.getLogger("upstreamwx.refs.cache")
 
+# Decode failures that indicate a corrupt/truncated on-disk subset (vs. a programming error):
+# eccodes/cfgrib surface a truncated GRIB message as EOFError, a malformed one as ValueError or a
+# low-level OSError. These trigger a one-shot re-fetch (see load_probability_field_cached),
+# mirroring the GEFS path so an already-corrupt REFS file self-heals on read rather than degrading
+# REFS until the cycle is pruned (data quality first-class, NFR-6).
+_CORRUPT_SUBSET_ERRORS = (EOFError, ValueError, OSError)
+
+
+def _discard_subset(path: Path) -> None:
+    """Delete a corrupt cached subset (and any ``.idx`` sidecar) so the next fetch re-downloads."""
+    for p in (path, path.with_suffix(path.suffix + ".idx")):
+        try:
+            p.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:  # best-effort; a stuck file just means the re-fetch overwrites it
+            logger.debug("could not remove %s during self-heal: %s", p, exc)
+
 
 @dataclass(frozen=True)
 class FieldSpec:
@@ -124,20 +142,35 @@ def load_probability_field_cached(
     # Resolve the active feed (AWS / NOMADS) once so the cache write and any live probe agree.
     base, subdir = refs_feed(settings)
 
-    path, selected = cached_subset(
-        path,
-        idx_url=cycle.idx_url(fhour, product=product, domain=domain, base=base, subdir=subdir),
-        grib_url=cycle.product_url(fhour, product=product, domain=domain, base=base, subdir=subdir),
-        select=lambda entries: select_messages(entries, var=var, prob=prob, fcst=fcst),
-        refresh=refresh,
-        what=f"f{fhour:02d} var={var!r} prob={prob!r} fcst={fcst!r}",
-        # Pass this module's (patchable) network calls so tests patching
-        # ``upstreamwx.refs.cache.*`` still intercept.
-        fetch_idx=fetch_idx,
-        download_subset=download_subset,
-    )
+    def _materialize(*, refresh: bool):
+        return cached_subset(
+            path,
+            idx_url=cycle.idx_url(fhour, product=product, domain=domain, base=base, subdir=subdir),
+            grib_url=cycle.product_url(
+                fhour, product=product, domain=domain, base=base, subdir=subdir
+            ),
+            select=lambda entries: select_messages(entries, var=var, prob=prob, fcst=fcst),
+            refresh=refresh,
+            what=f"f{fhour:02d} var={var!r} prob={prob!r} fcst={fcst!r}",
+            # Pass this module's (patchable) network calls so tests patching
+            # ``upstreamwx.refs.cache.*`` still intercept.
+            fetch_idx=fetch_idx,
+            download_subset=download_subset,
+        )
 
-    da = decode_cached(path, _decode)
+    path, selected = _materialize(refresh=refresh)
+
+    try:
+        da = decode_cached(path, _decode)
+    except _CORRUPT_SUBSET_ERRORS as exc:
+        # A truncated/corrupt cached subset (classically EOFError from a range fetched mid-publish)
+        # would otherwise degrade REFS on every briefing for the cached cycle's life. Self-heal:
+        # drop the bad artifact and re-fetch once (the download path validates the bytes); a second
+        # failure propagates so the caller degrades this field rather than caching garbage (NFR-6).
+        logger.warning("REFS subset %s failed to decode (%s); refetching once", path.name, exc)
+        _discard_subset(path)
+        _materialize(refresh=True)
+        da = decode_cached(path, _decode)
     return RefsField(
         name=var,
         threshold=prob,
