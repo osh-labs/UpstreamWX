@@ -301,7 +301,14 @@ def _render_source_data(lines: list[str], bundle: IngestBundle | None) -> None:
     lines.append(f"- Apparent temp: {_num(bundle.apparent_temp_f, '°F')}")
     lines.append(f"- Wind: {_num(bundle.wind_mph, 'mph')}")
     lines.append(f"- Measurable window precip: {_ynu(bundle.measurable_precip)}")
-    lines.append(f"- Antecedent precip (24–72 h): {_ynu(bundle.antecedent_precip_24_72h)}")
+    ante = f"- Antecedent precip (24–72 h): {_ynu(bundle.antecedent_precip_24_72h)}"
+    # When observed QPE drove it, show the basin number the value is derived from (provenance).
+    if bundle.antecedent_source == "mrms_qpe_72h" and bundle.antecedent_qpe_mean_in is not None:
+        ante += (
+            f" (observed: MRMS 72 h QPE, basin mean {bundle.antecedent_qpe_mean_in:.2f} in"
+            f", max {bundle.antecedent_qpe_max_in:.2f} in)"
+        )
+    lines.append(ante)
 
     # Data gaps lead the availability section: a hazard assessed without its primary
     # input must be visibly "unassessed" in the artifact itself (NFR-6).

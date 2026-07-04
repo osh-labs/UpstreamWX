@@ -65,6 +65,18 @@ class IngestBundle:
     measurable_precip: bool | None = None
     antecedent_precip_24_72h: bool | None = None
 
+    # Antecedent-wetness provenance (§16.1 modifier). ``antecedent_precip_24_72h`` above is the
+    # engine-facing tri-state boolean; these carry *how* it was derived so the SITREP and the
+    # structured contract can show the number the user asked to verify. When observed MRMS QPE is
+    # aggregated over the upstream watershed it supersedes the Open-Meteo point QPF (observed >
+    # model) and sets ``antecedent_source="mrms_qpe_72h"`` with the basin mean/max inches; when it
+    # is unavailable or out of window the Open-Meteo point value stands (``antecedent_source`` then
+    # ``open_meteo_point`` or None). ``_in`` values are inches over the antecedent window.
+    antecedent_source: str | None = None
+    antecedent_qpe_mean_in: float | None = None
+    antecedent_qpe_max_in: float | None = None
+    antecedent_qpe_valid: str | None = None  # MRMS file valid time, ISO8601 UTC; provenance
+
     # Per-hour display forecast over the window (FR-6; M0.4 Forecast view). Display only,
     # not an engine input; None when ingest could not populate it (NFR-6).
     forecast_hourly: ForecastHourly | None = None

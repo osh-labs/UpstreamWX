@@ -60,7 +60,8 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     thresholds.py          loads the YAML threshold config (FR-20a)
     hazards/               one pure evaluate() per hazard: flash_flood, lightning, heat, cold_wet
   data/thresholds/*.yaml   externalized Appendix B threshold matrices + provenance
-  ingest/                provider abstraction + live adapters (nws, openmeteo, spc, gefs_provider, refs_provider)
+  ingest/                provider abstraction + live adapters (nws, openmeteo, spc, gefs_provider, refs_provider, qpe_provider)
+    qpe_provider.py        observed MRMS 72h QPE aggregated over the upstream basin for antecedent wetness (supersedes the Open-Meteo model-QPF point value when in window; §16.1, FR-3)
     base.py                IngestBundle + Provider Protocol + to_hazard_inputs()
     orchestrator.py        mission -> trace -> bundle -> HazardInputs
   grib/                  shared GRIB2 .idx byte-range subsetting + polygon zonal aggregation (used by gefs + refs)

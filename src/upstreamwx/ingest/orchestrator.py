@@ -20,7 +20,7 @@ from shapely.geometry.base import BaseGeometry
 
 from ..engine.models import HazardInputs, Mission
 from ..watershed import clip_watershed, delineate_cached, roc_disk
-from . import gefs_provider, nws, openmeteo, refs_provider, spc
+from . import gefs_provider, nws, openmeteo, qpe_provider, refs_provider, spc
 from .base import IngestBundle, to_hazard_inputs
 
 # Providers that don't need the watershed polygon; (name, module).
@@ -38,6 +38,11 @@ MANDATORY = {"nws", "nws_afd"}
 # ``notes`` accumulate as a list. The flood-product flags merge by OR: the point provider and
 # the upstream-basin alert check (FR-5 + FR-3) both contribute, and an active product from
 # either must never be erased by the other's False (raise-only, order-independent).
+# ``antecedent_precip_24_72h`` is the one field with a *defined precedence* rather than a single
+# owner: Open-Meteo (point providers) sets the model-QPF fallback, and the watershed branch's QPE
+# task sets the observed basin value when available. Both merge by the default-value rule below,
+# and because the ensemble branch merges *after* the point providers (see ``gather``), an observed
+# value (non-default) always supersedes the model one — observed > model (§16.1, data quality).
 _MERGE_UPDATE_DICT_FIELDS = frozenset({"sources_ok"})
 _MERGE_MAX_DICT_FIELDS = frozenset({"member_support"})
 _MERGE_LIST_FIELDS = frozenset({"notes"})
@@ -94,6 +99,28 @@ def _run_refs(
     except Exception as exc:  # noqa: BLE001
         bundle.sources_ok[refs_provider.NAME] = False
         bundle.notes.append(f"refs: unavailable ({type(exc).__name__}).")
+    return bundle
+
+
+def _run_qpe(mission: Mission, polygon: BaseGeometry | None) -> IngestBundle:
+    """Aggregate observed MRMS QPE over the basin for the antecedent proxy (NFR-6 degrade).
+
+    Runs into a private bundle merged after GEFS/REFS. When it sets ``antecedent_precip_24_72h``
+    (observed basin mean), that value supersedes the Open-Meteo point QPF via the merge order
+    (ensemble branch merges after the point providers). A None polygon or any failure leaves the
+    model point value in place — observed QPE is an override, never a mandatory source.
+    """
+    bundle = IngestBundle()
+    if polygon is None:
+        return bundle
+    try:
+        qpe_provider.fetch(mission, bundle, polygon)
+    except Exception as exc:  # noqa: BLE001 — degrade per NFR-6; model QPF stands
+        bundle.sources_ok[qpe_provider.NAME] = False
+        bundle.notes.append(
+            f"antecedent (observed): MRMS QPE unavailable ({type(exc).__name__}); "
+            "Open-Meteo model QPF retained for antecedent wetness."
+        )
     return bundle
 
 
@@ -197,14 +224,18 @@ def _run_watershed_and_ensembles(
         # Warning polygon over the upper watershed — where the storm is — may not cover
         # the canyon mouth, so the point check alone misses it. Raise-only (ORed into the
         # point provider's flags at merge); its failure can only miss a raise (NFR-6).
-        with ThreadPoolExecutor(max_workers=3) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             gefs_future = executor.submit(_run_gefs, mission, polygon, lightning_polygon, cycle)
             refs_future = executor.submit(_run_refs, mission, polygon, lightning_polygon)
+            # Observed-QPE antecedent aggregates over the flash-flood domain (watershed/RoC),
+            # not the lightning disk; it needs the basin, so it rides the same pool.
+            qpe_future = executor.submit(_run_qpe, mission, polygon)
             alerts_future = (
                 executor.submit(nws.basin_flood_flags, polygon) if polygon is not None else None
             )
             gefs_bundle = gefs_future.result()
             refs_bundle = refs_future.result()
+            qpe_bundle = qpe_future.result()
             if alerts_future is not None:
                 try:
                     for flag, value in alerts_future.result().items():
@@ -217,6 +248,9 @@ def _run_watershed_and_ensembles(
                     )
         _merge_into(bundle, gefs_bundle)
         _merge_into(bundle, refs_bundle)
+        # QPE merges after the ensembles so its observed antecedent (when present) is the
+        # value that then supersedes the point providers' model QPF in ``gather`` (merge order).
+        _merge_into(bundle, qpe_bundle)
 
         # REFS is authoritative inside its same-day window: where it is in range its 3 km member
         # support drives the confidence qualifier, overriding the per-key max merge with coarse

@@ -55,6 +55,18 @@ class Settings(BaseSettings):
     # contact (FR-5). Override via UPSTREAMWX_NWS_USER_AGENT to your own contact.
     nws_user_agent: str = "UpstreamWX/0.1 (+https://upstreamwx.com)"
 
+    # MRMS Multi-Sensor QPE base URL (observed radar+gauge precip; the antecedent-wetness
+    # source aggregated over the upstream watershed, FR-3/§16.1). Default is NCEP's public
+    # real-time 2D product tree. The provider reads the ``MultiSensor_QPE_72H_Pass2`` (gauge-
+    # corrected 72 h accumulation) product dir under this base. Override for a mirror/archive.
+    mrms_base_url: str = "https://mrms.ncep.noaa.gov/data/2D"
+    # Max age (hours) of the newest MRMS accumulation file still served as "current", and how
+    # far into the future a mission window may start while observed QPE still covers its
+    # antecedent window. Beyond either bound the antecedent proxy falls back to the Open-Meteo
+    # model QPF point value (which can see a future antecedent window), NFR-6.
+    mrms_max_age_h: float = 12.0
+    mrms_future_window_h: float = 24.0
+
     # Number of recent GEFS cycles to retain in the on-disk member cache before pruning.
     # 4 covers ~1 day of GEFS's four daily cycles (00/06/12/18Z).
     gefs_cache_keep_cycles: int = 4
