@@ -9,8 +9,11 @@
   `src/upstreamwx/config.py`). The PWA's own client-side validation is defence-in-depth only and
   is out of scope; a modified or scripted client that bypasses `frontend/js/app.js` must be
   bounded entirely by the API.
-- **Deliverable of this document:** an implementation-ready workplan. No product code is changed
-  by this file.
+- **Deliverable of this document:** an implementation-ready workplan.
+- **Status:** ✅ **Implemented** (branch `claude/sa-02-hardening-plan-g1zagd`). All six workstreams
+  landed, verified live end-to-end against a running uvicorn server, and covered by offline tests
+  (450 passing, ruff clean). Live testing also caught and fixed a non-finite-float → 500 gap now
+  returning a bounded 422. See §6 for the per-item done checklist.
 
 ---
 
