@@ -1520,6 +1520,11 @@ function applyBriefingLayers(map, b) {
     map.addSource("roc", { type: "geojson", data: rocGeom });
     map.addLayer({ id: "roc-line", type: "line", source: "roc",
       paint: { "line-color": UI_ORANGE, "line-width": 1, "line-dasharray": [4, 4] } });
+    // Transparent fat hit target so the thin dashed ring is tappable without a
+    // pixel-perfect tap (issue #111). Rendered (opacity 0) so it still fires
+    // click/hover; kept on top of the visible line.
+    map.addLayer({ id: "roc-hit", type: "line", source: "roc",
+      paint: { "line-color": UI_ORANGE, "line-width": 24, "line-opacity": 0 } });
   }
 
   // Lightning Area of Concern ring: solid yellow (PRD §16.1). Not fed to fitBounds so
@@ -1531,6 +1536,9 @@ function applyBriefingLayers(map, b) {
     map.addSource("laoc", { type: "geojson", data: laocGeom });
     map.addLayer({ id: "laoc-line", type: "line", source: "laoc",
       paint: { "line-color": UI_YELLOW, "line-width": 1.5 } });
+    // Transparent fat hit target for touch fuzziness (issue #111).
+    map.addLayer({ id: "laoc-hit", type: "line", source: "laoc",
+      paint: { "line-color": UI_YELLOW, "line-width": 24, "line-opacity": 0 } });
   }
 
   // Fit to the kept watershed bounds (FR-1).
@@ -1596,17 +1604,29 @@ function initMainMap(b) {
     _mainMap.on("mouseleave", "watershed-fill", () => {
       if (!_moveMode) _mainMap.getCanvas().style.cursor = "";
     });
-    _mainMap.on("mouseenter", "laoc-line", () => {
-      if (!_moveMode) _mainMap.getCanvas().style.cursor = "pointer";
-    });
-    _mainMap.on("mouseleave", "laoc-line", () => {
-      if (!_moveMode) _mainMap.getCanvas().style.cursor = "";
-    });
+    // Hover cursor for the ring hit targets (the fat transparent lines, issue #111).
+    for (const hit of ["roc-hit", "laoc-hit"]) {
+      _mainMap.on("mouseenter", hit, () => {
+        if (!_moveMode) _mainMap.getCanvas().style.cursor = "pointer";
+      });
+      _mainMap.on("mouseleave", hit, () => {
+        if (!_moveMode) _mainMap.getCanvas().style.cursor = "";
+      });
+    }
+
+    // True when a ring hit target (roc-hit/laoc-hit) is also under the click, so the
+    // broad fill handlers can yield to the more specific ring popup and we don't stack
+    // two popups where the fat hit line overlaps a fill band (issue #111).
+    const _onRingHit = (e) => {
+      const layers = ["roc-hit", "laoc-hit"].filter((id) => _mainMap.getLayer(id));
+      return layers.length > 0 &&
+        _mainMap.queryRenderedFeatures(e.point, { layers }).length > 0;
+    };
 
     // Click popups (layer-scoped; survive setStyle because the same layer IDs are
     // re-added by applyBriefingLayers on each style switch).
     _mainMap.on("click", "watershed-fill", (e) => {
-      if (_moveMode) return;
+      if (_moveMode || _onRingHit(e)) return;
       const wb = state.briefing?.watershed;
       if (!wb) return;
       new maplibregl.Popup({ className: "map-popup" })
@@ -1619,7 +1639,7 @@ function initMainMap(b) {
         .addTo(_mainMap);
     });
     _mainMap.on("click", "excluded-fill", (e) => {
-      if (_moveMode) return;
+      if (_moveMode || _onRingHit(e)) return;
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
@@ -1628,13 +1648,29 @@ function initMainMap(b) {
         </div>`)
         .addTo(_mainMap);
     });
-    _mainMap.on("click", "laoc-line", (e) => {
+    _mainMap.on("click", "laoc-hit", (e) => {
       if (_moveMode) return;
+      const laocR = state.briefing?.laoc?.radius_mi;
+      const laocMi = Number.isFinite(laocR) ? ` (${laocR.toFixed(0)} mi)` : "";
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
-          <div class="map-pop__title">Lightning Area of Concern</div>
+          <div class="map-pop__title">Lightning Area of Concern${laocMi}</div>
           <div class="map-pop__row">Lightning assessed within this radius of the activity</div>
+        </div>`)
+        .addTo(_mainMap);
+    });
+    // RoC ring tap: the fat hit target makes the dashed ring itself tappable
+    // (previously only the hatched excluded fill carried this tooltip, issue #111).
+    _mainMap.on("click", "roc-hit", (e) => {
+      if (_moveMode) return;
+      const rocR = state.briefing?.roc?.radius_mi;
+      const rocMi = Number.isFinite(rocR) ? ` (${rocR.toFixed(0)} mi)` : "";
+      new maplibregl.Popup({ className: "map-popup" })
+        .setLngLat(e.lngLat)
+        .setHTML(`<div class="map-pop">
+          <div class="map-pop__title">Radius of Concern${rocMi}</div>
+          <div class="map-pop__row">Upstream weather-data domain bounded to this radius</div>
         </div>`)
         .addTo(_mainMap);
     });
