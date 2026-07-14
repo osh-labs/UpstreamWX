@@ -68,6 +68,11 @@ const LAOC_DEFAULT_MI = 15;
 const UI_YELLOW = "#facc15";
 const PHASE_STOPS_HR = [0.5, 1, 1.5, 2, 3];
 const PHASE_DEFAULT_HR = 1;
+// Default mission duration seeded in the planner (hours), and the maximum window the
+// GEFS/REFS ensemble horizon can cover. MAX_WINDOW_DAYS mirrors the backend bound in
+// api/models.py so the planner blocks an over-long window before it is ever submitted.
+const DEFAULT_WINDOW_HR = 4;
+const MAX_WINDOW_DAYS = 7;
 const DEFAULT_PREFS = {
   laoc_radius_km: LAOC_DEFAULT_MI * MI_TO_KM,
   approach_hrs: PHASE_DEFAULT_HR,
@@ -419,6 +424,22 @@ const DEMO_MODE =
   /\.github\.io$/i.test(location.hostname) ||
   new URLSearchParams(location.search).has("demo");
 
+// Turn an API error `detail` into readable text for the status line / error card. FastAPI
+// request-validation failures (e.g. the mission-window bounds) arrive as an array of
+// `{msg, ctx, ...}` objects — surface the plain-language message(s), not the raw JSON the
+// user would otherwise see (issue: long-mission 422). A string detail is used as-is.
+function formatApiError(status, detail) {
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail)) {
+    const msgs = detail
+      .map((d) => d?.ctx?.error || String(d?.msg || "").replace(/^Value error,\s*/, ""))
+      .map((m) => m.trim())
+      .filter(Boolean);
+    if (msgs.length) return msgs.join("; ");
+  }
+  return `server returned ${status}`;
+}
+
 // POST the mission spec and return the freshly generated briefing, or throw with a
 // useful message. This is the live path; it never substitutes other data on failure.
 async function postBriefing(spec) {
@@ -443,7 +464,7 @@ async function postBriefing(spec) {
     let detail = `server returned ${res.status}`;
     try {
       const j = await res.clone().json();
-      if (j && j.detail) detail = `${res.status}: ${typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)}`;
+      if (j && j.detail) detail = formatApiError(res.status, j.detail);
     } catch (_) { /* non-JSON body (e.g. proxy 504) — keep the status */ }
     const err = new Error(detail);
     err.status = res.status;
@@ -2318,6 +2339,37 @@ function addHoursLocal(str, h) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+// Portable planner-window defaults, reused for the initial seed and for restoring a field
+// the native date picker's "Reset" clears: start = the next whole hour in the mission's
+// timezone, end = start + DEFAULT_WINDOW_HR.
+function plannerDefaultStart(tz) {
+  return nextWholeHour(tz);
+}
+function plannerDefaultEnd(startVal) {
+  return addHoursLocal(startVal, DEFAULT_WINDOW_HR);
+}
+
+// True when the window exceeds the ensemble's MAX_WINDOW_DAYS reach. Both bounds are
+// same-timezone wall-clock strings, so parsing them as browser-local cancels the offset.
+function windowExceedsMax(startVal, endVal) {
+  if (!startVal || !endVal) return false;
+  return new Date(endVal + ":00") - new Date(startVal + ":00") > MAX_WINDOW_DAYS * 86400000;
+}
+
+// Live planner feedback: surface the window problems the save guard blocks on the moment a
+// field changes, rather than only when the user hits Save (or the backend 422s).
+function updatePlannerWindowStatus(startVal, endVal, tz) {
+  if (startVal && startVal <= nowInTz(tz)) {
+    setPlannerStatus("Start time is in the past — missions cannot be planned retroactively.", true);
+  } else if (windowExceedsMax(startVal, endVal)) {
+    setPlannerStatus(
+      `Mission window can be at most ${MAX_WINDOW_DAYS} days — the GEFS/REFS ensemble can't ` +
+      `forecast a longer trip.`, true);
+  } else {
+    setPlannerStatus("");
+  }
+}
+
 // Return a spec with start/end shifted forward (preserving duration and time-of-day) so
 // that start is in the future relative to now in the mission timezone.  Used by "Update
 // Briefing" to prevent re-generating a briefing whose window has already passed.
@@ -2579,12 +2631,12 @@ function openMissionPlanner(spec) {
   const tz = _mpSpec.tz_name ?? null;
   const startStr = String(_mpSpec.start || "").slice(0, 16);
   const startIsStale = !startStr || startStr <= nowInTz(tz);
-  const startVal = startIsStale ? nextWholeHour(tz) : startStr;
+  const startVal = startIsStale ? plannerDefaultStart(tz) : startStr;
   document.getElementById("mp-start").value = startVal;
 
   const endStr = String(_mpSpec.end || "").slice(0, 16);
   const endIsStale = !endStr || endStr <= startVal;
-  document.getElementById("mp-end").value = endIsStale ? addHoursLocal(startVal, 4) : endStr;
+  document.getElementById("mp-end").value = endIsStale ? plannerDefaultEnd(startVal) : endStr;
   // Reset the flag so end auto-follows start again unless the user edits it.
   _mpEndUserSet = !endIsStale;
 
@@ -2661,25 +2713,40 @@ function initPlannerControls() {
     updatePlannerRoc();
   });
 
-  // Start time: warn if in the past; auto-advance end by 4 h if end hasn't been set or
-  // if the new start has moved past the existing end.
+  // Start time: warn if in the past or over the window cap; auto-advance end by the default
+  // duration if end hasn't been set or if the new start has moved past the existing end. The
+  // native date picker's "Reset" clears the field — restore the default rather than blank it.
   document.getElementById("mp-start").addEventListener("change", () => {
-    const startVal = document.getElementById("mp-start").value;
-    if (!startVal) return;
+    const startEl = document.getElementById("mp-start");
     const tz = _mpSpec?.tz_name ?? null;
-    if (startVal <= nowInTz(tz)) {
-      setPlannerStatus("Start time is in the past — missions cannot be planned retroactively.", true);
-    } else {
-      setPlannerStatus("");
+    let startVal = startEl.value;
+    if (!startVal) {
+      startVal = plannerDefaultStart(tz);
+      startEl.value = startVal;
     }
     const endEl = document.getElementById("mp-end");
     if (!_mpEndUserSet || !endEl.value || startVal >= endEl.value) {
-      endEl.value = addHoursLocal(startVal, 4);
+      endEl.value = plannerDefaultEnd(startVal);
     }
+    updatePlannerWindowStatus(startVal, endEl.value, tz);
   });
 
-  // End time: once the user touches this field it stops auto-following start.
-  document.getElementById("mp-end").addEventListener("change", () => { _mpEndUserSet = true; });
+  // End time: once the user picks a value it stops auto-following start. The native picker's
+  // "Reset" clears the field — restore the default and resume auto-follow rather than blank it.
+  document.getElementById("mp-end").addEventListener("change", () => {
+    const endEl = document.getElementById("mp-end");
+    const startEl = document.getElementById("mp-start");
+    const tz = _mpSpec?.tz_name ?? null;
+    const startVal = startEl.value || plannerDefaultStart(tz);
+    if (!startEl.value) startEl.value = startVal;
+    if (!endEl.value) {
+      endEl.value = plannerDefaultEnd(startVal);
+      _mpEndUserSet = false;
+    } else {
+      _mpEndUserSet = true;
+    }
+    updatePlannerWindowStatus(startVal, endEl.value, tz);
+  });
 
   // Name field: clear default placeholder on focus, restore on blur if empty, sync to spec.
   const nameInput = document.getElementById("mp-name");
@@ -2735,6 +2802,14 @@ function initPlannerControls() {
     if (endMs - startMs < minDurationMs) {
       const minLabel = phaseLabel(minDurationHr);
       setPlannerStatus(`End time must be at least ${minLabel} after start (approach + egress time).`, true);
+      return;
+    }
+    // Cap the window at the ensemble horizon (matches the backend MAX_WINDOW_DAYS bound) so an
+    // over-long trip is caught here instead of round-tripping to a 422 (issue: long mission).
+    if (windowExceedsMax(startVal, endVal)) {
+      setPlannerStatus(
+        `Mission window can be at most ${MAX_WINDOW_DAYS} days — the GEFS/REFS ensemble can't ` +
+        `forecast a longer trip.`, true);
       return;
     }
     const spec = {
