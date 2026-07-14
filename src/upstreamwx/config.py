@@ -117,6 +117,14 @@ class Settings(BaseSettings):
     # 512 distinct missions is generous for a single-host beta; raise where RAM allows.
     api_cache_max_entries: int = 512
 
+    # Resident byte budget for the in-process briefing + result caches (SA-02). The entry-count
+    # cap alone does not bound memory: one large mission (name/route_note) or a big rendered
+    # briefing, multiplied across N entries, can retain gigabytes despite a modest count cap.
+    # The caches now evict LRU until BOTH the entry cap and this byte budget hold. With mission
+    # and inputs fields bounded at the request boundary, each entry is small; this guarantees the
+    # ceiling even under a max-legal-size load test. 256 MiB is safe on a >=2 GiB host.
+    api_cache_max_bytes: int = 256 * 1024 * 1024
+
     # Cap the active-mission refresh registry (H-8). refresh_active re-ingests every registered
     # mission each cycle, so scheduler cost scales linearly with the registry — which previously
     # grew without bound (entries only dropped when their window ended). At the cap the service
@@ -136,6 +144,15 @@ class Settings(BaseSettings):
     # Set UPSTREAMWX_API_RATE_LIMITS_ENABLED=0 to disable (e.g. load tests).
     api_rate_limits_enabled: bool = True
 
+    # Per-IP budget for cold /v1/briefing GENERATIONS (cache MISSES), SA-02. Cache hits are free
+    # and uncounted; only work that spends live ingest is charged, so reopening the app or a
+    # scheduled refresh never draws on this budget. Complements the nginx edge limit and the
+    # briefing_max_concurrency cap with a per-principal COST budget (the edge/concurrency caps
+    # bound rate and simultaneity, not how much cold work one client can force over time).
+    # ~10/min is generous for a real planning session (each distinct mission is one miss) yet
+    # caps abuse. 0 disables. Gated by api_rate_limits_enabled.
+    api_briefing_miss_rate_per_min: float = 10.0
+
     # Cap concurrent live briefing GENERATIONS (the cold, memory/CPU-heavy ingest path) so a burst
     # of simultaneous distinct missions can't OOM/thrash a small host — excess requests wait briefly
     # for a slot, then return a fast 503 "busy, retry" (the PWA shows a retry banner) instead of all
@@ -146,6 +163,27 @@ class Settings(BaseSettings):
     # quick collision resolve (and possibly hit the cache the in-flight request fills); past it the
     # client is told to retry rather than risk overrunning the gateway timeout (a 504).
     briefing_busy_timeout_s: float = 2.0
+
+    # Accept the offline HazardInputs replay path on the public API (FR-25). Ordinary PWA users
+    # never send `inputs`; it is a dev/corpus/CLI affordance that skips live ingest and creates
+    # non-expiring static cache entries (SA-02). Default on for CLI/dev parity; set
+    # UPSTREAMWX_API_ALLOW_INPUTS_REPLAY=0 on the public beta so an anonymous client cannot pin
+    # cheap, durable cache entries (the durable half of the SA-02 memory-exhaustion vector).
+    api_allow_inputs_replay: bool = True
+
+    # TTL (seconds) for deterministic static (inputs-replay) cache entries (SA-02). They
+    # previously never expired (cache.py STATIC_TOKEN), so a pinned replay entry could persist
+    # for the whole process lifetime. Bounding their lifetime is belt-and-suspenders behind
+    # api_allow_inputs_replay=0. Live (cycle-scoped) entries are unaffected — they already
+    # expire on the next ensemble cycle (NFR-6).
+    api_static_entry_ttl_s: float = 3600.0
+
+    # App-level request-byte cap for the JSON mission endpoints (/v1/briefing, /frame, /warm),
+    # SA-02. A real MissionSpec is a few KB even with a full inputs vector; anything larger is an
+    # abuse payload. Enforced IN-APP (not only via nginx client_max_body_size) so the standalone
+    # uvicorn entry point and a drifted edge config are both covered. The PDF endpoint keeps its
+    # own larger 2 MiB cap.
+    api_max_request_bytes: int = 64 * 1024
 
     # Dead-man's-switch monitoring (Healthchecks.io or any ping-on-success service). When
     # set, the GEFS/REFS + AFD refresh scheduler pings this URL each cycle (".../start" before the

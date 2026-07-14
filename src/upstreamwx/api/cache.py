@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import hashlib
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Generic, TypeVar
@@ -36,17 +37,25 @@ _V = TypeVar("_V")
 
 
 class BoundedLRU(Generic[_V]):
-    """Thread-safe string-keyed LRU with a hard entry cap.
+    """Thread-safe string-keyed LRU with a hard entry cap and an optional byte budget.
 
     A minimal building block for the in-process caches: ``get`` refreshes recency,
     ``put`` evicts the least-recently-used entries past ``maxsize``. Bounding these
     maps stops the unbounded per-mission growth that would otherwise leak on an
     always-on host (M0.1.1).
+
+    A count cap alone does not bound *memory* — a few large entries can retain gigabytes
+    behind a modest entry cap (SA-02). When ``maxbytes`` is set, callers pass each entry's
+    estimated ``size`` to :meth:`put` and eviction continues (oldest first) until the total
+    retained bytes fit the budget too, keeping at least the most-recent entry.
     """
 
-    def __init__(self, maxsize: int = DEFAULT_MAX_ENTRIES) -> None:
+    def __init__(self, maxsize: int = DEFAULT_MAX_ENTRIES, *, maxbytes: int | None = None) -> None:
         self._maxsize = max(1, maxsize)
+        self._maxbytes = maxbytes
         self._store: OrderedDict[str, _V] = OrderedDict()
+        self._sizes: dict[str, int] = {}
+        self._total_bytes = 0
         self._lock = threading.Lock()
 
     def get(self, key: str) -> _V | None:
@@ -56,12 +65,35 @@ class BoundedLRU(Generic[_V]):
             self._store.move_to_end(key)
             return self._store[key]
 
-    def put(self, key: str, value: _V) -> None:
+    def put(self, key: str, value: _V, *, size: int = 0) -> None:
         with self._lock:
+            if key in self._store:
+                self._total_bytes -= self._sizes.get(key, 0)
             self._store[key] = value
             self._store.move_to_end(key)
-            while len(self._store) > self._maxsize:
-                self._store.popitem(last=False)
+            self._sizes[key] = size
+            self._total_bytes += size
+            # Evict oldest while over the entry cap, or over the byte budget with >1 entry
+            # left (never evict the sole most-recent entry, even if it alone exceeds budget).
+            while len(self._store) > self._maxsize or (
+                self._maxbytes is not None
+                and self._total_bytes > self._maxbytes
+                and len(self._store) > 1
+            ):
+                old_key, _ = self._store.popitem(last=False)
+                self._total_bytes -= self._sizes.pop(old_key, 0)
+
+    def discard(self, key: str) -> None:
+        """Remove ``key`` if present (used to evict a TTL-expired entry)."""
+        with self._lock:
+            if key in self._store:
+                del self._store[key]
+                self._total_bytes -= self._sizes.pop(key, 0)
+
+    @property
+    def total_bytes(self) -> int:
+        with self._lock:
+            return self._total_bytes
 
     def __len__(self) -> int:
         with self._lock:
@@ -70,6 +102,8 @@ class BoundedLRU(Generic[_V]):
     def clear(self) -> None:
         with self._lock:
             self._store.clear()
+            self._sizes.clear()
+            self._total_bytes = 0
 
 
 def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> str:
@@ -102,25 +136,70 @@ def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> s
 class _Entry:
     briefing: GeneratedBriefing
     token: str  # the cycle id (or STATIC_TOKEN) this entry is valid for
+    stamp: float = 0.0  # monotonic insertion time — the static-entry TTL clock (SA-02)
+
+
+def _estimate_bytes(briefing: object) -> int:
+    """Estimate the retained size of a cached briefing (SA-02).
+
+    A ``GeneratedBriefing`` is dominated by its rendered Markdown plus the retained
+    ``Mission`` strings (``name``/``route_note``). Deliberately defensive — accessed via
+    ``getattr`` so a lightweight test stub carrying only ``.markdown`` is handled — and an
+    over-approximation (fixed overhead added) so the byte budget is a safe ceiling.
+    """
+    n = len(str(getattr(briefing, "markdown", "")).encode("utf-8"))
+    result = getattr(briefing, "result", None)
+    mission = getattr(result, "mission", None)
+    n += len(getattr(mission, "name", "") or "") + len(getattr(mission, "route_note", "") or "")
+    return n + 2048  # fixed overhead for the structured/result object graph
 
 
 class BriefingCache:
-    """Thread-safe in-process briefing cache with cycle-scoped validity, LRU-bounded."""
+    """Thread-safe in-process briefing cache with cycle-scoped validity, LRU-bounded.
 
-    def __init__(self, maxsize: int = DEFAULT_MAX_ENTRIES) -> None:
-        self._store: BoundedLRU[_Entry] = BoundedLRU(maxsize)
+    Bounded on two axes (SA-02): the entry count (``maxsize``) and, when ``maxbytes`` is set,
+    the estimated retained bytes. Deterministic static (inputs-replay) entries never expire by
+    cycle, so an optional ``static_ttl_s`` bounds their lifetime instead — a pinned replay entry
+    cannot persist for the whole process lifetime.
+    """
 
-    def get(self, key: str, token: str) -> GeneratedBriefing | None:
-        """Return the cached briefing iff present and valid for ``token`` (else None)."""
+    def __init__(
+        self,
+        maxsize: int = DEFAULT_MAX_ENTRIES,
+        *,
+        maxbytes: int | None = None,
+        static_ttl_s: float | None = None,
+    ) -> None:
+        self._store: BoundedLRU[_Entry] = BoundedLRU(maxsize, maxbytes=maxbytes)
+        self._static_ttl_s = static_ttl_s
+
+    def get(self, key: str, token: str, *, now: float | None = None) -> GeneratedBriefing | None:
+        """Return the cached briefing iff present and valid for ``token`` (else None).
+
+        A static entry stays valid across cycles but expires once older than ``static_ttl_s``
+        (evicted on read); a live entry is valid only for the cycle ``token`` it was stored for.
+        """
         entry = self._store.get(key)
         if entry is None:
             return None
-        if entry.token == STATIC_TOKEN or entry.token == token:
+        if entry.token == STATIC_TOKEN:
+            if self._static_ttl_s is not None:
+                now = time.monotonic() if now is None else now
+                if now - entry.stamp > self._static_ttl_s:
+                    self._store.discard(key)  # expired replay entry — evict and miss
+                    return None
+            return entry.briefing
+        if entry.token == token:
             return entry.briefing
         return None
 
-    def put(self, key: str, briefing: GeneratedBriefing, token: str) -> None:
-        self._store.put(key, _Entry(briefing=briefing, token=token))
+    def put(
+        self, key: str, briefing: GeneratedBriefing, token: str, *, now: float | None = None
+    ) -> None:
+        now = time.monotonic() if now is None else now
+        self._store.put(
+            key, _Entry(briefing=briefing, token=token, stamp=now), size=_estimate_bytes(briefing)
+        )
 
     def __len__(self) -> int:
         return len(self._store)

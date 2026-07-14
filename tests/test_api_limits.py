@@ -16,6 +16,7 @@ All offline — no network, no LLM.
 
 from __future__ import annotations
 
+import dataclasses
 import importlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,10 +31,12 @@ from upstreamwx.api.app import app, service
 from upstreamwx.api.cache import mission_cache_key
 from upstreamwx.api.models import (
     MAX_RADIUS_KM,
+    HazardInputsSpec,
     MissionSpec,
     MissionWindowError,
 )
 from upstreamwx.api.service import BriefingService, WarmQueueFull
+from upstreamwx.engine.models import HazardInputs
 
 # The package re-exports the FastAPI instance as `app`, shadowing the submodule under
 # `import upstreamwx.api.app as ...`; resolve the module itself for its private helpers.
@@ -368,3 +371,81 @@ def test_mission_spec_constructor_rejects_bad_windows():
         MissionSpec(**_base(lat=23.0))
     with pytest.raises(ValidationError):
         MissionSpec(**_base(lightning_radius_km=MAX_RADIUS_KM + 1))
+
+
+# -- SA-02 WS-1: bounded MissionSpec string/collection fields -----------------------------
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("name", "x" * 81),
+        ("route_note", "x" * 1001),
+        ("party_size", 0),
+        ("party_size", 201),
+    ],
+    ids=["name-81", "route_note-1001", "party_size-0", "party_size-201"],
+)
+def test_missionspec_field_bounds_reject(field, value):
+    """Oversized/out-of-range mission fields are 422 at construction, before any work (SA-02)."""
+    with pytest.raises(ValidationError):
+        MissionSpec(**_base(**{field: value}))
+
+
+def test_missionspec_field_bounds_accept_boundaries():
+    """The exact boundary values (80 / 1000 / 1 / 200) construct fine."""
+    MissionSpec(**_base(name="x" * 80))
+    MissionSpec(**_base(route_note="x" * 1000))
+    MissionSpec(**_base(party_size=1))
+    MissionSpec(**_base(party_size=200))
+
+
+# -- SA-02 WS-2: strict HazardInputsSpec (unknown keys / non-finite / out-of-range) --------
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"bogus": 1},                                   # unknown key (extra='forbid')
+        {"gefs_p_precip": float("inf")},                # non-finite
+        {"gefs_p_precip": float("nan")},                # non-finite
+        {"gefs_p_precip": 150},                         # out of [0, 100]
+        {"gefs_p_precip": -1},                          # out of [0, 100]
+        {"member_support": {"not_a_hazard": 0.5}},      # unknown hazard key
+        {"member_support": {"flash_flood": 1.5}},       # value out of [0, 1]
+    ],
+    ids=["unknown", "inf", "nan", "over-100", "under-0", "bad-hazard", "support>1"],
+)
+def test_hazardinputs_spec_rejects(inputs):
+    with pytest.raises(ValidationError):
+        HazardInputsSpec(**inputs)
+
+
+def test_inputs_envelope_unwraps_and_still_validates():
+    """The {"inputs": {...}} envelope unwraps, and inner strict validation still applies."""
+    spec = MissionSpec(**_base(inputs={"inputs": SAMPLE_INPUTS}))
+    assert spec.inputs is not None
+    with pytest.raises(ValidationError):
+        MissionSpec(**_base(inputs={"inputs": {"bogus": 1}}))
+
+
+# -- SA-02 WS-2: determinism guard (no drift; bit-identical dataclass) ---------------------
+def test_hazardinputs_spec_matches_dataclass_fields_and_defaults():
+    dc_fields = {f.name for f in dataclasses.fields(HazardInputs)}
+    assert set(HazardInputsSpec.model_fields) == dc_fields  # no field drift
+    spec_defaults = HazardInputsSpec().model_dump()
+    dc_defaults = HazardInputs()
+    for name in dc_fields:
+        assert spec_defaults[name] == getattr(dc_defaults, name), name
+
+
+@pytest.mark.parametrize(
+    "vec",
+    [
+        {},
+        {"gefs_p_precip": 40, "measurable_precip": True},
+        {"member_support": {"flash_flood": 0.8, "lightning": 0.5}},
+        {"flash_flood_warning": True, "cape_jkg": 1200, "heat_index_f": 103.0},
+        SAMPLE_INPUTS,
+    ],
+    ids=["empty", "partial", "support", "products+thermo", "sample_fixture"],
+)
+def test_hazardinputs_spec_roundtrip_bit_identical(vec):
+    """HazardInputsSpec(**vec).to_dataclass() reproduces the exact engine dataclass (NFR-4)."""
+    assert HazardInputsSpec(**vec).to_dataclass() == HazardInputs(**vec)

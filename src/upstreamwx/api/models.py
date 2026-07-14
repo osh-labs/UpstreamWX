@@ -11,9 +11,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from ..engine.models import ActivityType, HazardInputs, Mission
+from ..engine.models import ActivityType, Hazard, HazardInputs, Mission
 from ..timezones import localize_window
 
 # ---------------------------------------------------------------------------------------
@@ -69,6 +69,87 @@ ClockToken = Annotated[str, Field(max_length=24), AfterValidator(_reject_markup)
 ShortToken = Annotated[str, Field(max_length=32), AfterValidator(_reject_markup)]
 
 
+# ---------------------------------------------------------------------------------------
+# Strict engine-input request model (SA-02). The offline replay path (FR-25) previously
+# accepted ``inputs: dict`` and expanded it with ``HazardInputs(**data)`` — an unknown key
+# became a 500 (TypeError) and NaN/inf/out-of-range floats flowed straight into the engine.
+# The constrained scalar aliases below plus :class:`HazardInputsSpec` reject all of that at
+# the model boundary while reproducing the exact engine dataclass, so deterministic offline
+# replays stay bit-identical (NFR-4, FR-25).
+# ---------------------------------------------------------------------------------------
+# Percent probability [0, 100] over the upstream/lightning domain (engine convention).
+Prob = Annotated[float, Field(ge=0, le=100, allow_inf_nan=False)]
+# Unit interval [0, 1] — per-hazard ensemble member support (FR-17).
+Unit = Annotated[float, Field(ge=0, le=1, allow_inf_nan=False)]
+# Any finite float (temperatures, rates, CAPE, wind): reject NaN/inf, leave the range open.
+FiniteF = Annotated[float, Field(allow_inf_nan=False)]
+
+
+class HazardInputsSpec(BaseModel):
+    """Strict request mirror of the engine :class:`HazardInputs` dataclass (SA-02).
+
+    Reproduces **every** field of ``engine.models.HazardInputs`` with identical defaults,
+    but strictly validated: ``extra='forbid'`` turns an unknown key into a bounded 422 (not
+    a 500 from ``HazardInputs(**data)``), every float rejects NaN/inf, and probabilities are
+    clamped to their real domains. :meth:`to_dataclass` yields the exact engine dataclass, so
+    offline replays and the validation corpus reproduce bit-identically (NFR-4, FR-25).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Active NWS products (FR-5); defaults mirror the dataclass exactly.
+    flash_flood_warning: bool = False
+    flash_flood_watch: bool = False
+    flood_warning: bool = False
+    flood_advisory: bool = False
+    flood_watch: bool = False
+    thunderstorm_warning: bool = False
+    nws_products_available: bool = True
+
+    # GEFS ensemble aggregates over the upstream domain.
+    gefs_p_precip: Prob | None = None
+    gefs_p_tstm: Prob | None = None
+    measurable_precip: bool | None = False          # tri-state: None = unknown (preserved)
+    convective_rate_in_per_hr: FiniteF | None = None
+    cape_jkg: FiniteF | None = None
+
+    # REFS same-day high-resolution overlay (FR-7a).
+    refs_p_precip: Prob | None = None
+    refs_p_lightning: Prob | None = None
+
+    # Confidence inputs (FR-17): member_support keyed by Hazard.value, each in [0, 1].
+    member_support: dict[str, Unit] = Field(default_factory=dict, max_length=8)
+    source_agreement: str = Field(default="consistent", max_length=16)
+
+    # SPC/AFD signals.
+    spc_category: str | None = Field(default=None, max_length=32)
+    afd_storm_mode: str | None = Field(default=None, max_length=32)
+    afd_flood_mention: bool = False
+
+    # Open-Meteo derived fields (deg F / mph).
+    heat_index_f: FiniteF | None = None
+    apparent_temp_f: FiniteF | None = None
+    wind_mph: FiniteF | None = None
+    antecedent_precip_24_72h: bool | None = False   # tri-state: None = unknown (preserved)
+
+    # Data-quality / activity modifiers.
+    domain_complete: bool = True
+    dry_party: bool = False
+
+    @field_validator("member_support")
+    @classmethod
+    def _known_hazards(cls, v: dict[str, float]) -> dict[str, float]:
+        """Reject member_support keys that are not valid :class:`Hazard` values (SA-02)."""
+        bad = set(v) - {h.value for h in Hazard}
+        if bad:
+            raise ValueError(f"unknown hazard keys in member_support: {sorted(bad)}")
+        return v
+
+    def to_dataclass(self) -> HazardInputs:
+        """Expand to the engine dataclass unchanged — bit-identical replays (NFR-4, FR-25)."""
+        return HazardInputs(**self.model_dump())
+
+
 class MissionSpec(BaseModel):
     """A mission briefing request (mirrors the `upstreamwx` CLI flags).
 
@@ -87,11 +168,11 @@ class MissionSpec(BaseModel):
     activity: ActivityType
     start: datetime = Field(description="window start (ISO 8601)")
     end: datetime = Field(description="window end (ISO 8601)")
-    name: str = "mission"
+    name: str = Field(default="mission", max_length=80)
     approach_end: datetime | None = Field(default=None, description="phase marker (FR-9a)")
     egress_start: datetime | None = Field(default=None, description="phase marker (FR-9a)")
-    party_size: int | None = None
-    route_note: str | None = None
+    party_size: int | None = Field(default=None, ge=1, le=200)
+    route_note: str | None = Field(default=None, max_length=1000)
     slot: bool = False
     radius_km: float | None = Field(
         default=None,
@@ -112,10 +193,20 @@ class MissionSpec(BaseModel):
         default=None,
         description="add Haiku framing; null = frame iff ANTHROPIC_API_KEY is set (FR-21)",
     )
-    inputs: dict | None = Field(
-        default=None,
-        description="optional saved HazardInputs feature vector; skips live ingest (offline)",
-    )
+    inputs: HazardInputsSpec | None = None
+
+    @field_validator("inputs", mode="before")
+    @classmethod
+    def _unwrap_envelope(cls, v: object) -> object:
+        """Accept the corpus/CLI ``{"inputs": {...}}`` envelope before strict validation (SA-02).
+
+        The offline replay path (FR-25) sometimes wraps the feature vector in an outer
+        ``inputs`` key; unwrap that single-key envelope so the inner object is validated as a
+        :class:`HazardInputsSpec`. Any other value passes through unchanged.
+        """
+        if isinstance(v, dict) and set(v) == {"inputs"} and isinstance(v["inputs"], dict):
+            return v["inputs"]
+        return v
 
     @model_validator(mode="after")
     def _validate_window(self) -> MissionSpec:
@@ -180,12 +271,8 @@ class MissionSpec(BaseModel):
         )
 
     def to_inputs(self) -> HazardInputs | None:
-        data = self.inputs
-        if data is None:
-            return None
-        if "inputs" in data:  # accept the corpus/CLI {inputs: {...}} envelope too
-            data = data["inputs"]
-        return HazardInputs(**data)
+        """Expand the validated ``inputs`` spec to the engine dataclass (FR-25)."""
+        return self.inputs.to_dataclass() if self.inputs is not None else None
 
 
 class WatershedWarmRequest(BaseModel):
