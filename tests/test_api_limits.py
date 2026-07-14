@@ -449,3 +449,52 @@ def test_hazardinputs_spec_matches_dataclass_fields_and_defaults():
 def test_hazardinputs_spec_roundtrip_bit_identical(vec):
     """HazardInputsSpec(**vec).to_dataclass() reproduces the exact engine dataclass (NFR-4)."""
     assert HazardInputsSpec(**vec).to_dataclass() == HazardInputs(**vec)
+
+
+# -- SA-02 WS-3: the offline inputs-replay path is 403 when disabled -----------------------
+def test_inputs_replay_disabled_returns_403(client, monkeypatch):
+    """With api_allow_inputs_replay off, an inputs request is refused before any work (SA-02)."""
+    monkeypatch.setenv("UPSTREAMWX_API_ALLOW_INPUTS_REPLAY", "0")
+    resp = client.post("/v1/briefing", json=_base())  # _base() supplies inputs
+    assert resp.status_code == 403
+    assert "replay" in resp.text.lower()
+
+
+def test_inputs_replay_enabled_by_default(client):
+    """Default (dev/CLI) keeps the replay path working (FR-25 parity)."""
+    assert client.post("/v1/briefing", json=_base()).status_code == 200
+
+
+# -- SA-02 WS-4: oversized request bodies are 413 before parsing/generation ----------------
+def test_oversized_request_body_rejected_413(client):
+    """A body over the app-level cap is 413 at the middleware, before model validation/ingest."""
+    # A 100k-char name makes the raw JSON body exceed the 64 KiB cap; the middleware rejects on
+    # bytes before the model's 80-char name cap (which would be a 422) is ever consulted.
+    resp = client.post("/v1/briefing", json=_base(name="x" * 100_000))
+    assert resp.status_code == 413
+
+
+def test_normal_body_passes_middleware(client):
+    """A legitimate small request is unaffected by the body cap."""
+    assert client.post("/v1/briefing", json=_base()).status_code == 200
+
+
+# -- SA-02 WS-6: cold cache MISSES are per-IP cost-limited; hits are free ------------------
+def test_briefing_miss_rate_limit_429(client):
+    """Distinct offline missions from one IP exhaust the miss budget and 429; the fresh bucket
+    holds 10, so past that a cold miss is refused (cache hits, tested below, never count)."""
+    codes = [
+        client.post("/v1/briefing", json=_base(lat=37.0 + i * 0.01)).status_code
+        for i in range(12)
+    ]
+    assert 429 in codes
+    assert codes.count(200) <= 10
+
+
+def test_briefing_cache_hits_never_charged(client):
+    """Reposting the SAME mission is a cache hit after the first miss — never rate-limited."""
+    payload = _base(lat=36.5)
+    first = client.post("/v1/briefing", json=payload)
+    assert first.status_code == 200
+    for _ in range(30):  # far past the 10/min miss budget, but all hits
+        assert client.post("/v1/briefing", json=payload).status_code == 200
