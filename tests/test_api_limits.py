@@ -498,3 +498,26 @@ def test_briefing_cache_hits_never_charged(client):
     assert first.status_code == 200
     for _ in range(30):  # far past the 10/min miss budget, but all hits
         assert client.post("/v1/briefing", json=payload).status_code == 200
+
+
+# -- SA-02 WS-2 (regression): non-finite floats over HTTP are a bounded 422, not a 500 -----
+def test_nonfinite_json_body_returns_bounded_422(client):
+    """A JSON body with Infinity/NaN/1e400 must be a serializable 422 (SA-02), never a 500.
+
+    json.loads accepts these non-standard tokens (-> inf/nan), which validate as errors; the
+    default error response would echo the non-finite input and fail strict-JSON serialization
+    (500). The custom RequestValidationError handler keeps the 422 bounded and serializable.
+    """
+    for raw in (
+        b'{"lat":37.02,"lon":-111.98,"activity":"canyon","start":"2026-06-20T08:00",'
+        b'"end":"2026-06-20T18:00","inputs":{"gefs_p_precip":Infinity}}',
+        b'{"lat":37.02,"lon":-111.98,"activity":"canyon","start":"2026-06-20T08:00",'
+        b'"end":"2026-06-20T18:00","inputs":{"gefs_p_tstm":NaN}}',
+        b'{"lat":37.02,"lon":-111.98,"activity":"canyon","start":"2026-06-20T08:00",'
+        b'"end":"2026-06-20T18:00","inputs":{"refs_p_precip":1e400}}',
+    ):
+        resp = client.post(
+            "/v1/briefing", content=raw, headers={"Content-Type": "application/json"}
+        )
+        assert resp.status_code == 422, resp.text
+        resp.json()  # response body is valid JSON (would raise if the 500 path leaked through)

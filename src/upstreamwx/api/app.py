@@ -32,8 +32,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -295,6 +296,33 @@ app = FastAPI(
 )
 # Reject oversized mission-endpoint bodies before the handlers parse them (SA-02).
 app.add_middleware(_MaxBodySizeMiddleware, max_bytes=get_settings().api_max_request_bytes)
+
+
+def _json_safe(obj: object) -> object:
+    """Replace non-finite floats with a string marker so an error body stays JSON-serializable."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else repr(obj)  # inf / nan -> "inf" / "nan"
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Return a bounded, always-serializable 422 for invalid request bodies (SA-02).
+
+    A JSON body can carry non-finite floats — the ``Infinity``/``NaN`` tokens, or ``1e400`` —
+    which parse to ``inf``/``nan`` and validate (correctly) as errors, but then land in the
+    error detail's echoed ``input``. The default strict-JSON error response (``allow_nan=False``)
+    then raises while rendering, turning a clean 422 into a 500. Sanitising the encoded errors
+    keeps the 422 bounded and serializable, mirroring the ``/v1/briefing/pdf`` handler's intent.
+    """
+    detail = _json_safe(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/v1/health")
