@@ -446,6 +446,7 @@ async function postBriefing(spec) {
       if (j && j.detail) detail = `${res.status}: ${typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail)}`;
     } catch (_) { /* non-JSON body (e.g. proxy 504) — keep the status */ }
     const err = new Error(detail);
+    err.status = res.status;
     // 503 (server's concurrent-generation cap: "busy") and 504 (gateway timeout) are transient —
     // the caller surfaces a retry banner rather than a dead-end error.
     err.retryable = res.status === 503 || res.status === 504;
@@ -575,6 +576,10 @@ async function loadBriefing(spec) {
 // A failed live fetch must NOT silently swap in other data — that reads as "the edit
 // did nothing". Surface the failure and keep the current briefing on screen.
 async function refresh(spec) {
+  // Any path here (point move, saved-mission edit, retry) whose window has already aged out
+  // self-heals to the next equivalent window rather than 422-ing (issue #122). No-op for a
+  // window still underway or within grace.
+  spec = freshenStaleSpec(spec);
   persistSpec(spec);
   const status = document.getElementById("status");
   if (DEMO_MODE) {
@@ -2305,6 +2310,33 @@ function specWithFutureTimes(spec) {
   };
 }
 
+// Grace period after a window's end past which the API rejects the briefing request as
+// stale (422). Mirrors the backend's MAX_ENDED_AGE_H (api/models.py) — kept in sync so the
+// PWA advances a saved window *before* submitting rather than after being rejected.
+const STALE_WINDOW_GRACE_H = 24;
+
+// True when a spec's window ended more than the grace period ago (in the mission's own
+// timezone), i.e. the backend would reject it with a stale-window 422. Compares the
+// zero-padded "YYYY-MM-DDTHH:MM" strings lexicographically, which matches chronological
+// order for this fixed format.
+function isWindowStale(spec, nowStr = nowInTz(spec?.tz_name ?? null)) {
+  const endStr = String(spec?.end || "").slice(0, 16);
+  if (!endStr) return false;
+  return addHoursLocal(endStr, STALE_WINDOW_GRACE_H) < nowStr;
+}
+
+// Advance a saved mission's window only when it has genuinely aged out of the serviceable
+// horizon (issue #122): a stored spec whose trip ended days ago would 422 on submit and
+// strand the installed PWA on a dead-end error with no reload/pull-to-refresh escape. Roll
+// such a window forward — preserving location, time-of-day, and duration, exactly as the
+// "Update Briefing" button does — so reopening after days away just briefs the same spot for
+// the next equivalent window. A window still underway or within the grace period is returned
+// unchanged (same reference), so this never silently moves a mission the user can still use.
+function freshenStaleSpec(spec) {
+  if (!spec || !isWindowStale(spec)) return spec;
+  return specWithFutureTimes(spec);
+}
+
 // Reflect the slider index in the readout ("20 mi") and keep _mpSpec.radius_km in km.
 function updateRocReadout(idx) {
   const el = document.getElementById("mp-radius-value");
@@ -2819,6 +2851,23 @@ function renderAll(b) {
   selectTab(state.tab);
 }
 
+// Actionable recovery card for a window-horizon 422: instead of a static dead-end message
+// (unescapable on an installed PWA — the reload button just re-submits the same window),
+// explain that the saved mission's window needs updating and wire a button straight into the
+// planner, pre-seeded with the mission rolled forward to a current window (issue #122).
+function showWindowErrorCard(spec) {
+  const view = document.getElementById("view-overview");
+  if (!view) return;
+  view.innerHTML =
+    `<section class="card"><p class="summary">This mission's weather window has passed, so a ` +
+    `current briefing can't be generated for it. Update the window to a current or upcoming trip ` +
+    `to continue.</p>` +
+    `<div class="mission-card__actions"><button class="btn-primary" id="window-error-update" ` +
+    `type="button">Update mission</button></div></section>`;
+  const btn = document.getElementById("window-error-update");
+  if (btn) btn.addEventListener("click", () => openMissionPlanner(freshenStaleSpec(spec)));
+}
+
 async function main() {
   try {
     const cfg = await fetch("data/display-config.json").then((r) => r.json());
@@ -2831,11 +2880,19 @@ async function main() {
   initPlannerControls();
   initSettingsControls();
   initInstallPrompt();
+  // Boot spec: the saved mission, or the seed default on first run. Advance a window that
+  // has aged out of the serviceable horizon *before* the first fetch so reopening the
+  // installed PWA days later never submits a stale window and dead-ends on a 422 with no
+  // in-app recovery (issue #122). Persist the advance only for a real saved mission — the
+  // seed default must stay unsaved so first run still opens the planner.
+  const saved = savedSpec();
+  const bootSpec = freshenStaleSpec(saved || DEFAULT_SPEC);
+  if (saved && bootSpec !== saved) persistSpec(bootSpec);
   // First run with no saved mission: present the planner so the user picks a
   // point. Defer until the ack is accepted when it's showing this load.
   const promptFirstRun = () => {
     if (savedSpec()) return;
-    openMissionPlanner(state.briefing ? specFromBriefing(state.briefing) : DEFAULT_SPEC);
+    openMissionPlanner(state.briefing ? specFromBriefing(state.briefing) : bootSpec);
   };
   const ackShown = maybeShowAck(promptFirstRun);
   // Registered before the first fetch so connectivity flips re-render the status
@@ -2845,20 +2902,30 @@ async function main() {
   let b;
   startProgress();
   try {
-    b = await loadBriefing(savedSpec() || DEFAULT_SPEC);
+    b = await loadBriefing(bootSpec);
   } catch (e) {
     // A transient failure (server busy / gateway timeout / network) gets the retry banner so the
     // user can re-run without reloading the app; other errors show the inline explanation.
     completeProgress();
     if (e && (e.retryable || e instanceof TypeError)) {
-      showBusyBanner(savedSpec() || DEFAULT_SPEC);
+      showBusyBanner(bootSpec);
       // Offline (or transient outage) at boot: render the persisted last briefing,
       // clearly labeled with its stored-at age, instead of a dead-end retry banner
       // (FR-26/FR-28 — the last briefing stays reviewable at a no-signal trailhead).
-      if (restoreStoredBriefing(savedSpec() || DEFAULT_SPEC)) {
+      if (restoreStoredBriefing(bootSpec)) {
         if (!ackShown) promptFirstRun();
         return;
       }
+    }
+    // A 422 means the window is outside the serviceable horizon (stale, or planned beyond the
+    // forecast reach). Roll-forward above prevents the common stale case, but a residual 422
+    // must never be a dead end on an installed PWA with no reload escape (issue #122): show an
+    // actionable card offering a one-tap "Update mission" into the planner so the user can set a
+    // current window. A 422 means the server answered, so they're online — no offline-restore.
+    if (e && e.status === 422) {
+      showWindowErrorCard(bootSpec);
+      if (!ackShown) promptFirstRun();
+      return;
     }
     document.getElementById("view-overview").innerHTML =
       `<section class="card"><p class="summary">Could not generate a briefing ` +
@@ -2867,9 +2934,8 @@ async function main() {
     return;
   }
   completeProgress();
-  const initialSpec = savedSpec() || DEFAULT_SPEC;
   renderAll(b);
-  streamSummary(initialSpec);
+  streamSummary(bootSpec);
   if (!ackShown) promptFirstRun();
 }
 
