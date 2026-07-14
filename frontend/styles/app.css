@@ -1239,11 +1239,16 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 .mp-map {
   flex: 1;
   min-height: 0;
+  /* Override the global `.maplibregl-map { width: 100% }` rule: on this element the
+   * horizontal margins would otherwise stack on top of a full-parent-width box and push
+   * the map past the sheet's right edge (issue #117). `auto` lets the flex cross-axis
+   * stretch size it to the space that remains after the margins. */
+  width: auto;
   margin: var(--space-2) var(--space-4) 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: var(--color-surface-2);
-  overflow: visible;
+  overflow: hidden;
 }
 .mp-hint {
   margin: 0;
