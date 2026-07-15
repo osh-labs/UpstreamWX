@@ -85,6 +85,8 @@ def test_health(client):
         "max_request_bytes",
         "allow_inputs_replay",
         "briefing_miss_rate_per_min",
+        # SA-01 access gate
+        "auth_active",
     }
     assert isinstance(limits["decode_pool"], bool)
     assert isinstance(limits["decode_cache_max_bytes"], int)

@@ -80,12 +80,14 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     sources.py             verify-against-NWS source links
     cli.py                 `upstreamwx` console entry
   api/                   M0.3 FastAPI service (`upstreamwx-api`)
-    app.py                 POST /v1/briefing, POST /v1/briefing/pdf, POST /v1/watershed/warm, GET /v1/health; mounts the PWA (StaticFiles, M0.4); refresh scheduler + warm pool
+    app.py                 POST /v1/briefing, /v1/briefing/frame, /v1/briefing/pdf, /v1/watershed/warm, /v1/session, GET /v1/health; access-gate + body-cap middleware; mounts the PWA (StaticFiles, M0.4); refresh scheduler + warm pool
     service.py             BriefingService (cache-aware generation + active-mission refresh + background watershed warming)
     cache.py               BriefingCache (keyed by location/window/activity, valid one ensemble cycle)
     cycles.py              pure ensemble-cycle arithmetic (00/06/12/18Z)
     scheduler.py           asyncio refresh loop
     models.py              MissionSpec request / BriefingResponse (pydantic)
+    auth.py                anonymous fair-use session tokens — stateless HMAC, Principal, require_session, cookie (SA-01)
+    budget.py              per-principal + global rolling-window cost/abuse budgets (SA-01)
 spikes/                  runnable de-risk CLIs (spike_a..f) — historical, still runnable
                            (spike_e REFS / spike_f GEFS de-risk the SREF+HREF EOL transition; see docs/m0.0)
 tests/                   hermetic suite + committed fixtures + validation corpus
@@ -359,9 +361,36 @@ byte-budget-aware (`api_cache_max_bytes`) with a TTL on static entries (`api_sta
 and cold `/v1/briefing` cache **misses** are charged to a per-IP token bucket
 (`api_briefing_miss_rate_per_min`) while cache hits stay free (via a `get_briefing` `on_miss` hook).
 New settings live in `config.py` and are documented in `deploy/upstreamwx.env.example`; `/v1/health`
-echoes them. SA-01 (access gate) is handled for the private beta by a tailnet and is out of scope
-here; SA-04 (cache key omits mission metadata) is separate — these bounds only shrink its blast
-radius. Engine output unchanged (NFR-4).
+echoes them. SA-04 (cache key omits mission metadata) is separate — these bounds only shrink its
+blast radius. Engine output unchanged (NFR-4).
+
+**Public-release access gate: anonymous fair-use sessions (SA-01, 2026-07-15).** The private beta
+stays behind a tailnet; the *public* release replaces "possession of the URL is the invitation"
+with an **app-issued per-client principal** (workplan `docs/SA-01-public-auth-workplan.md`). The gate
+authenticates a *client*, not a person — **no login, no personal data** — so cost/abuse budgets attach
+to identity instead of a bare IP (the audit's "IP-only throttling is weak identity"). `api/auth.py`
+mints a **stateless HMAC-SHA256 token** (random `pid`, no server session table) delivered as an
+**HttpOnly / Secure / SameSite=Lax cookie** (HttpOnly ⇒ a compromised CDN script (SA-05) can't read
+it; SameSite=Lax is the CSRF control; Secure ⇒ TLS is a prerequisite, SA-09). `POST /v1/session` mints
+it (per-IP rate-limited); the PWA calls it transparently on boot (`ensureSession()` in
+`frontend/js/app.js`, with a 401 re-mint/retry) — no UI. A pure-ASGI `_SessionMiddleware` fail-closes
+by path (every `/v1/*` except `health`/`session` needs a valid token, so a new route can't ship
+unauthenticated), and `require_session` hands each endpoint a typed `Principal`. `api/budget.py` charges
+**per-principal** (fairness → 429) and **global** (ceiling/circuit-breaker → 503, the daily model-spend
+cap logs a WARNING) rolling windows on cold briefings / framing / PDF / warm — **cache hits are free**;
+the existing per-IP token buckets (SA-02) remain the IP-aggregate layer beneath, defeating token
+rotation. Refresh registration is now capped **per principal** (`budget_active_per_principal`),
+delivering the "register only authorized principals" half of SA-03. Also folded in from SA-12: `/docs`
+off by default (`docs_enabled`) and the standalone `main()` binds loopback. **Secret-gated activation:**
+`api_auth_enabled` defaults **ON**, but the gate only ENFORCES when a signing secret is present
+(`auth_active()` = enabled ∧ secret) — so the secretless contexts (dev, CLI, the offline suite, the
+tailnet beta) run **open** with a startup WARNING instead of crashing, while the public host activates
+the gate simply by setting `UPSTREAMWX_SESSION_SECRET`. `api_auth_required=1` makes a secretless start
+**fail closed** (the public host sets it, so a config slip can't silently ship `/v1` open); `/v1/health`
+echoes `auth_active` so monitoring catches an accidentally-open host. In-process counters (single-worker
+deployment; the shared-store version is the same M0.1.1 upgrade the cache documents). Deferred:
+proof-of-work mint hardening (GA) and the `/v1/health` field trim. Does **not** fix SA-04 or SA-02
+(separate). Engine output unchanged (NFR-4).
 
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP

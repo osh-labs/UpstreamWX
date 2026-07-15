@@ -110,7 +110,12 @@ def test_lifespan_shutdown_does_not_hang_on_blocked_scheduler(monkeypatch, caplo
         app_mod,
         "get_settings",
         lambda: SimpleNamespace(
-            api_enable_scheduler=True, api_enable_warm=False, api_enable_decode_pool=False
+            api_enable_scheduler=True,
+            api_enable_warm=False,
+            api_enable_decode_pool=False,
+            api_auth_enabled=False,  # SA-01 gate off: lifespan's startup checks short-circuit
+            api_auth_required=False,
+            session_secret=None,
         ),
     )
 

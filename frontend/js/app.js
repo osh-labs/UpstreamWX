@@ -33,6 +33,7 @@ let state = { briefing: null, fromCache: false, cachedRestore: null, tab: "overv
 const API_BRIEFING = "/v1/briefing";
 const API_FRAME = "/v1/briefing/frame";
 const API_WATERSHED_WARM = "/v1/watershed/warm";
+const API_SESSION = "/v1/session";
 const MISSION_KEY = "uwx.mission.v1";
 // Seed mission used on first run when nothing is saved (a real CONUS point).
 // Radius of Concern (FR-3): discrete, non-linear slider stops in miles; the data
@@ -440,9 +441,29 @@ function formatApiError(status, detail) {
   return `server returned ${status}`;
 }
 
+// Anonymous fair-use session (SA-01): mint the app-issued session cookie before the first
+// live request so the public host's access gate admits us. Memoized so the whole app shares
+// one mint; `force` re-mints after a 401 (an expired/rotated cookie). No login, no personal
+// data — the cookie identifies this client for fair-use budgets only. Best-effort: on the
+// tailnet beta the gate is off (the endpoint is a harmless no-op), and offline the mint just
+// fails quietly and the live fetch falls back to the stored briefing as before. Same-origin,
+// so the HttpOnly cookie rides along automatically on every /v1 request.
+let _sessionPromise = null;
+function ensureSession(force) {
+  if (DEMO_MODE) return Promise.resolve(); // static build has no live API
+  if (force) _sessionPromise = null;
+  if (!_sessionPromise) {
+    _sessionPromise = fetch(API_SESSION, { method: "POST", credentials: "same-origin" })
+      .then(() => {})
+      .catch(() => { _sessionPromise = null; }); // allow a later retry (e.g. after reconnect)
+  }
+  return _sessionPromise;
+}
+
 // POST the mission spec and return the freshly generated briefing, or throw with a
 // useful message. This is the live path; it never substitutes other data on failure.
 async function postBriefing(spec) {
+  await ensureSession();
   // Fold app-wide prefs into the request without persisting them into the mission spec.
   // approach_end / egress_start (FR-9a) are computed from the user's phase-time pref and
   // sent explicitly so the backend uses the user's preference rather than the 1-hr default.
@@ -455,11 +476,18 @@ async function postBriefing(spec) {
     egress_start: egressStart,
     lightning_radius_km: prefs.laoc_radius_km,
   };
-  const res = await fetch(API_BRIEFING, {
+  const opts = {
     method: "POST",
     headers: { "content-type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify(body),
-  });
+  };
+  let res = await fetch(API_BRIEFING, opts);
+  if (res.status === 401) {
+    // Session missing/expired: re-mint once and retry before surfacing an error.
+    await ensureSession(true);
+    res = await fetch(API_BRIEFING, opts);
+  }
   if (!res.ok) {
     let detail = `server returned ${res.status}`;
     try {
@@ -489,12 +517,14 @@ async function postBriefing(spec) {
 function warmWatershed(lat, lon) {
   if (DEMO_MODE) return; // no live API behind a static build
   if (!Number.isFinite(lat) || !Number.isFinite(lon)) return;
-  fetch(API_WATERSHED_WARM, {
+  // Best-effort warm: ensure a session first (the gate admits it), then fire and forget.
+  ensureSession().then(() => fetch(API_WATERSHED_WARM, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify({ lat, lon }),
     keepalive: true,
-  }).catch(() => {});
+  })).catch(() => {});
 }
 
 let _warmTimer = null;
@@ -527,6 +557,7 @@ function streamSummary(spec) {
   fetch(API_FRAME, {
     method: "POST",
     headers: { "content-type": "application/json" },
+    credentials: "same-origin",
     body: JSON.stringify(body),
   }).then(async (res) => {
     if (res.status === 204 || !res.ok || !res.body) {
@@ -1920,11 +1951,18 @@ async function exportBriefingPdf(b) {
 
   try {
     if (!navigator.onLine) throw new Error("offline — using the on-device template");
-    const res = await fetch("/v1/briefing/pdf", {
+    await ensureSession();
+    const pdfOpts = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
       body: JSON.stringify(briefing),
-    });
+    };
+    let res = await fetch("/v1/briefing/pdf", pdfOpts);
+    if (res.status === 401) {
+      await ensureSession(true);
+      res = await fetch("/v1/briefing/pdf", pdfOpts);
+    }
     if (!res.ok) {
       let detail = res.statusText;
       try { detail = (await res.json()).detail || detail; } catch (_) {}
@@ -2980,6 +3018,7 @@ function showWindowErrorCard(spec) {
 }
 
 async function main() {
+  ensureSession(); // start minting the fair-use session (SA-01) in parallel with boot
   try {
     const cfg = await fetch("data/display-config.json").then((r) => r.json());
     if (cfg?.tier_labels) Object.assign(TIER_LABELS, cfg.tier_labels);

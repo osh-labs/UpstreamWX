@@ -30,17 +30,30 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
+from starlette.requests import Request as _ScopeRequest
 
 from ..config import get_settings
 from ..grib import cache as grib_cache
 from ..sitrep.frame import _SYSTEM_PROMPT, DEFAULT_MODEL, _structured_view
+from .auth import (
+    Principal,
+    auth_active,
+    mint,
+    read_token,
+    require_session,
+    session_secrets,
+    set_session_cookie,
+    verify,
+)
+from .budget import BudgetEnforcer, BudgetExceeded, GlobalCeiling
 from .cache import mission_cache_key
 from .cycles import cycle_key, next_cycle
 from .models import BriefingResponse, MissionSpec, MissionWindowError, WatershedWarmRequest
@@ -139,6 +152,19 @@ _warm_limiter = _TokenBucketLimiter(_WARM_RATE_PER_MIN)
 # only confirmed cold work is charged (see service.get_briefing's on_miss hook). The rate comes
 # from settings so a deployment can tune it; the limiter is gated by api_rate_limits_enabled.
 _briefing_miss_limiter = _TokenBucketLimiter(get_settings().api_briefing_miss_rate_per_min)
+# Per-IP budget for session MINTING (SA-01): freely mintable anonymous tokens are the weak point
+# of the model, so minting is capped per IP beneath the per-principal/global budgets below.
+_session_mint_limiter = _TokenBucketLimiter(get_settings().session_mint_rate_per_min)
+
+# Per-principal + global fair-use / cost budgets (SA-01). Only active when api_auth_enabled;
+# the per-IP limiters above remain the IP-aggregate layer beneath these. Rolling windows.
+_budget = BudgetEnforcer()
+_HOUR_S = 3600.0
+_DAY_S = 86400.0
+
+# The authenticated principal, injected into every gated endpoint (SA-01). Annotated form
+# (not a `Depends()` default) so it composes cleanly and avoids the B008 default-call lint.
+_Session = Annotated[Principal, Depends(require_session)]
 
 
 def _client_ip(request: Request) -> str:
@@ -172,6 +198,55 @@ def _enforce_rate_limit(limiter: _TokenBucketLimiter, request: Request) -> None:
             detail="Rate limit exceeded for this endpoint — please retry shortly.",
             headers={"Retry-After": str(retry_after)},
         )
+
+
+# Per-kind budget config: (per-principal limit, per-principal window, global limit, global window).
+# Resolved from settings at charge time so a deployment can tune budgets without a restart. A
+# ``None`` global limit means the kind has no absolute ceiling (bounded by its own concurrency
+# cap instead — e.g. PDF by _pdf_sem, warm by the warm queue).
+def _budget_spec(kind: str, settings) -> tuple[int, float, int | None, float]:
+    return {
+        "cold": (
+            settings.budget_cold_per_principal_per_hour, _HOUR_S,
+            settings.budget_global_cold_per_hour, _HOUR_S,
+        ),
+        "frame": (
+            settings.budget_frame_per_principal_per_day, _DAY_S,
+            settings.budget_global_frame_per_day, _DAY_S,
+        ),
+        "pdf": (settings.budget_pdf_per_principal_per_hour, _HOUR_S, None, _HOUR_S),
+        "warm": (settings.budget_warm_per_principal_per_hour, _HOUR_S, None, _HOUR_S),
+    }[kind]
+
+
+def _charge_cost(kind: str, principal: Principal) -> None:
+    """Charge one unit of ``kind`` work to ``principal`` and the global ceiling (SA-01).
+
+    No-op unless the access gate is on. Over the per-principal budget → 429 + Retry-After;
+    at the global ceiling → 503 + Retry-After and a WARNING (the model-spend alerting hook).
+    Cache hits never call this — only confirmed work does.
+    """
+    settings = get_settings()
+    if not auth_active(settings):
+        return
+    per_principal, pp_window, global_limit, g_window = _budget_spec(kind, settings)
+    try:
+        _budget.charge_principal(kind, principal.pid, limit=per_principal, window_s=pp_window)
+        if global_limit is not None:
+            _budget.charge_global(kind, limit=global_limit, window_s=g_window)
+    except BudgetExceeded as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="You're making requests a bit fast — please retry shortly.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from None
+    except GlobalCeiling as exc:
+        logger.warning("global budget ceiling reached for %s work", kind)
+        raise HTTPException(
+            status_code=503,
+            detail="The service is at capacity right now — please retry shortly.",
+            headers={"Retry-After": str(exc.retry_after)},
+        ) from None
 
 
 # -----------------------------------------------------------------------------------------
@@ -239,16 +314,88 @@ class _MaxBodySizeMiddleware:
         return await self.app(scope, _replay, send)
 
 
+# -----------------------------------------------------------------------------------------
+# Anonymous-session access gate (SA-01), pure-ASGI so it never buffers a response (the SSE
+# frame endpoint must stream untouched, which BaseHTTPMiddleware can break).
+#
+# Fail-closed by path: when the gate is on, EVERY /v1/* path except this small allowlist
+# requires a valid session — so a newly added expensive route is gated even if its handler
+# forgets the require_session dependency. The verified principal is stashed on the ASGI scope
+# for the dependency to read (no double verification). Static PWA assets are not under /v1/ and
+# load freely, so the shell + JS can mint a session before the first live call.
+# -----------------------------------------------------------------------------------------
+_SESSION_EXEMPT_PATHS = frozenset({"/v1/health", "/v1/session", "/v1/session/challenge"})
+
+
+class _SessionMiddleware:
+    """Deny unauthenticated requests to gated /v1 paths when the access gate is on (SA-01)."""
+
+    def __init__(self, app: object) -> None:
+        self.app = app
+
+    async def _reject_401(self, send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b'{"detail":"A session is required \\u2014 reload the app."}',
+            }
+        )
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        settings = get_settings()
+        path = scope.get("path", "")
+        if auth_active(settings) and path.startswith("/v1/") and path not in (
+            _SESSION_EXEMPT_PATHS
+        ):
+            token = read_token(_ScopeRequest(scope))
+            principal = verify(token, session_secrets(settings))
+            if principal is None:
+                return await self._reject_401(send)
+            scope["uwx_principal"] = principal
+        return await self.app(scope, receive, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the cycle-aligned refresh scheduler for the app's lifetime (FR-12)."""
     task: asyncio.Task | None = None
     stop = asyncio.Event()
     settings = get_settings()
-    # Fresh rate-limit buckets per app run: a no-op in production (one lifespan per
+    # Access gate startup posture (SA-01). Secret-gated activation: on by default, but the gate
+    # only enforces when a signing secret is present.
+    #   * api_auth_required + no secret  -> FAIL CLOSED: a host that means to gate must never
+    #     silently ship open because the secret was forgotten.
+    #   * enabled + no secret            -> run OPEN, but WARN loudly (dev/CLI/test/tailnet case).
+    if settings.api_auth_required and not settings.session_secret:
+        raise RuntimeError(
+            "api_auth_required is set but UPSTREAMWX_SESSION_SECRET is empty — refusing to start "
+            "open (SA-01). Set a signing secret, or clear api_auth_required for an open host."
+        )
+    if settings.api_auth_enabled and not settings.session_secret:
+        logger.warning(
+            "access gate is enabled but UPSTREAMWX_SESSION_SECRET is unset — /v1 endpoints are "
+            "running OPEN (gate inactive). Set a signing secret to activate the gate (SA-01)."
+        )
+    # Fresh rate-limit buckets + budgets per app run: a no-op in production (one lifespan per
     # process) that also isolates TestClient contexts from each other without env plumbing.
-    for limiter in (_frame_limiter, _pdf_limiter, _warm_limiter, _briefing_miss_limiter):
+    for limiter in (
+        _frame_limiter,
+        _pdf_limiter,
+        _warm_limiter,
+        _briefing_miss_limiter,
+        _session_mint_limiter,
+    ):
         limiter.reset()
+    _budget.reset()
     if settings.api_enable_scheduler:
         task = asyncio.create_task(run_scheduler(service, stop=stop))
         logger.info("briefing refresh scheduler started")
@@ -288,14 +435,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 logger.exception("scheduler task raised during shutdown")
 
 
+# Interactive docs are disabled by default (SA-12): production should not publish its full
+# request surface. A dev/staging host sets UPSTREAMWX_DOCS_ENABLED=1 to restore /docs.
+_docs_on = get_settings().docs_enabled
 app = FastAPI(
     title="UpstreamWX Briefing API",
     version="0.3",
     summary="Mission-specific multi-hazard weather briefings (reference only).",
     lifespan=lifespan,
+    docs_url="/docs" if _docs_on else None,
+    redoc_url="/redoc" if _docs_on else None,
+    openapi_url="/openapi.json" if _docs_on else None,
 )
+# Middleware runs outermost-first in reverse registration order: the session gate (added last)
+# runs before the body cap, so an unauthenticated request is denied before its body is buffered.
 # Reject oversized mission-endpoint bodies before the handlers parse them (SA-02).
 app.add_middleware(_MaxBodySizeMiddleware, max_bytes=get_settings().api_max_request_bytes)
+# Deny unauthenticated requests to gated /v1 endpoints when the access gate is on (SA-01).
+app.add_middleware(_SessionMiddleware)
 
 
 def _json_safe(obj: object) -> object:
@@ -356,6 +513,9 @@ def health() -> dict:
             "active_missions_max": settings.api_active_missions_max,
             "warm_pending_max": settings.api_warm_pending_max,
             "rate_limits_enabled": settings.api_rate_limits_enabled,
+            # Whether the access gate is actually enforcing — lets monitoring catch a public host
+            # accidentally running open (enabled but no signing secret configured), SA-01/SA-12.
+            "auth_active": auth_active(settings),
             "cache_max_bytes": settings.api_cache_max_bytes,
             "static_entry_ttl_s": settings.api_static_entry_ttl_s,
             "max_request_bytes": settings.api_max_request_bytes,
@@ -365,8 +525,34 @@ def health() -> dict:
     }
 
 
+@app.post("/v1/session")
+def create_session(request: Request, response: Response) -> dict:
+    """Mint an anonymous fair-use session and set it as an HttpOnly cookie (SA-01).
+
+    The PWA calls this once on boot (before its first live request); the returned cookie
+    then authorises every expensive /v1 endpoint and keys the per-principal budgets. No
+    login, no personal data — the token identifies a *client* for fair-use accounting only.
+
+    Minting is per-IP rate limited (429) since freely mintable tokens are the model's weak
+    point. When the gate is disabled this is a harmless no-op so the PWA's boot flow is
+    identical on the tailnet beta and the public host.
+    """
+    settings = get_settings()
+    if not auth_active(settings):
+        return {"ok": True, "auth": False}
+    _enforce_rate_limit(_session_mint_limiter, request)
+    secret = settings.session_secret
+    if not secret:  # lifespan fails closed, but never mint on a blank secret regardless
+        raise HTTPException(status_code=503, detail="Session service is not configured.")
+    token = mint(secret, ttl=settings.session_ttl_s)
+    set_session_cookie(
+        response, token, ttl=settings.session_ttl_s, secure=settings.session_cookie_secure
+    )
+    return {"ok": True, "auth": True}
+
+
 @app.post("/v1/briefing", response_model=BriefingResponse)
-def briefing(spec: MissionSpec, request: Request) -> BriefingResponse:
+def briefing(spec: MissionSpec, request: Request, principal: _Session) -> BriefingResponse:
     """Generate (or return a cached) briefing for a mission spec.
 
     Non-mandatory source outages degrade gracefully (NFR-6): the briefing still renders
@@ -376,13 +562,17 @@ def briefing(spec: MissionSpec, request: Request) -> BriefingResponse:
     When the host is at its concurrent-generation cap, returns 503 with ``Retry-After`` so the
     PWA shows a "busy — retry" banner instead of every request piling on and OOM-ing the host.
     A live window outside the serviceable forecast horizon is a 422 (H-8). A disabled offline
-    replay path is a 403 (SA-02). Cache hits stay free; only cold cache MISSES are charged
-    against a per-IP cost budget (429 + Retry-After when over, SA-02) — see the ``on_miss`` hook.
+    replay path is a 403 (SA-02). Cache hits stay free; only cold cache MISSES are charged —
+    against the per-IP cost budget (SA-02) and the per-principal + global cold budget (SA-01) —
+    so an over-budget client is a 429/503 before any ingest (see the ``on_miss`` hook).
     """
+
+    def _on_miss() -> None:
+        _enforce_rate_limit(_briefing_miss_limiter, request)  # per-IP aggregate (SA-02)
+        _charge_cost("cold", principal)  # per-principal + global ceiling (SA-01)
+
     try:
-        return service.get_briefing(
-            spec, on_miss=lambda: _enforce_rate_limit(_briefing_miss_limiter, request)
-        )
+        return service.get_briefing(spec, on_miss=_on_miss, principal_pid=principal.pid)
     except MissionWindowError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
     except InputsReplayDisabled:
@@ -399,7 +589,9 @@ def briefing(spec: MissionSpec, request: Request) -> BriefingResponse:
 
 
 @app.post("/v1/briefing/frame")
-async def frame_stream(spec: MissionSpec, request: Request) -> StreamingResponse:
+async def frame_stream(
+    spec: MissionSpec, request: Request, principal: _Session
+) -> StreamingResponse:
     """Stream the Haiku plain-language narrative for a cached briefing as SSE (FR-21).
 
     The main ``/v1/briefing`` endpoint always skips Haiku so the structured posture
@@ -432,6 +624,10 @@ async def frame_stream(spec: MissionSpec, request: Request) -> StreamingResponse
             detail="No cached briefing for this spec — call /v1/briefing first.",
         )
 
+    # About to make a billable Anthropic call — charge the per-principal + global model budget
+    # here (not at entry) so a 204/404 costs the client nothing (SA-01).
+    _charge_cost("frame", principal)
+
     payload = _json.dumps(_structured_view(result), sort_keys=True, indent=2)
 
     async def generate():
@@ -455,7 +651,7 @@ async def frame_stream(spec: MissionSpec, request: Request) -> StreamingResponse
 
 
 @app.post("/v1/briefing/pdf")
-async def briefing_pdf(request: Request) -> Response:
+async def briefing_pdf(request: Request, principal: _Session) -> Response:
     """Render the structured briefing as a downloadable PDF via headless Chromium (FR-27).
 
     Accepts the ``BriefingResponse`` JSON the PWA already holds in memory, renders it
@@ -478,6 +674,7 @@ async def briefing_pdf(request: Request) -> Response:
     # Rate limit before touching the body: Chromium renders are the most expensive thing
     # this API can launch, so an over-budget client is turned away at zero cost (H-8).
     _enforce_rate_limit(_pdf_limiter, request)
+    _charge_cost("pdf", principal)  # per-principal PDF budget (SA-01)
     # Cheap header check first, then an authoritative check on the actual bytes (the
     # Content-Length header is client-supplied and absent on chunked uploads).
     declared = request.headers.get("content-length", "")
@@ -546,7 +743,9 @@ async def briefing_pdf(request: Request) -> Response:
 
 
 @app.post("/v1/watershed/warm", status_code=202)
-def warm_watershed(req: WatershedWarmRequest, request: Request) -> dict:
+def warm_watershed(
+    req: WatershedWarmRequest, request: Request, principal: _Session
+) -> dict:
     """Pre-warm the pour-point watershed cache for a point (FR-3).
 
     Fire-and-forget: the planner calls this the moment coordinates change so the upstream
@@ -558,6 +757,7 @@ def warm_watershed(req: WatershedWarmRequest, request: Request) -> dict:
     with ``Retry-After`` — a refused warm only forfeits the latency win (NFR-6).
     """
     _enforce_rate_limit(_warm_limiter, request)
+    _charge_cost("warm", principal)  # per-principal warm budget (SA-01)
     try:
         submitted = service.warm_watershed(req.lat, req.lon)
     except WarmQueueFull:
@@ -605,7 +805,16 @@ if _pwa is not None:
 
 
 def main() -> None:
-    """Console entry point: serve the API with uvicorn (``upstreamwx-api``)."""
+    """Console entry point: serve the API with uvicorn (``upstreamwx-api``).
+
+    Binds loopback by default (SA-12) so a bare ``upstreamwx-api`` is never exposed to all
+    interfaces without nginx's TLS, body caps, and edge throttling in front. Set
+    ``UPSTREAMWX_API_BIND_HOST`` (e.g. ``0.0.0.0``) to override; production uses the systemd
+    unit, which already pins the configured loopback bind.
+    """
+    import os
+
     import uvicorn
 
-    uvicorn.run("upstreamwx.api.app:app", host="0.0.0.0", port=8000)  # noqa: S104
+    host = os.environ.get("UPSTREAMWX_API_BIND_HOST", "127.0.0.1")
+    uvicorn.run("upstreamwx.api.app:app", host=host, port=8000)

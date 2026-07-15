@@ -26,6 +26,7 @@ from ..sitrep.generate import GeneratedBriefing, generate_briefing
 from ..sitrep.structured import to_structured
 from ..watershed.cache import _key as watershed_key
 from ..watershed.cache import delineate_cached
+from .auth import auth_active
 from .cache import STATIC_TOKEN, BoundedLRU, BriefingCache, _estimate_bytes, mission_cache_key
 from .cycles import cycle_key
 from .models import BriefingResponse, MissionSpec
@@ -73,6 +74,7 @@ class _Registered:
     mission: Mission
     frame: bool | None
     key: str
+    pid: str | None = None  # owning principal (SA-01/SA-03), None when the gate is off
 
 
 class BriefingService:
@@ -153,6 +155,7 @@ class BriefingService:
         *,
         now: datetime | None = None,
         on_miss: Callable[[], None] | None = None,
+        principal_pid: str | None = None,
     ) -> BriefingResponse:
         """Return a briefing for ``spec``, from cache when valid or freshly generated.
 
@@ -164,6 +167,10 @@ class BriefingService:
         ``on_miss`` (SA-02) is invoked once a cache miss is confirmed and *before* any cold
         generation is spent, so the caller can charge a per-principal cost budget (the miss rate
         limit) that cache hits never touch. It may raise to abort the cold path.
+
+        ``principal_pid`` (SA-01/SA-03) is the owning client's principal id. When the access gate
+        is on it caps scheduled-refresh registrations per principal, so one client cannot fill the
+        shared active-mission registry; the mission still briefs, it just gets no recurring refresh.
         """
         now = now or datetime.now(UTC)
         # Refuse the offline replay path when disabled (SA-02) — before any work, including the
@@ -211,27 +218,45 @@ class BriefingService:
             # Track live, still-in-range missions for the scheduler (FR-12). Deterministic
             # offline briefings need no refresh, so they are not registered.
             if inputs is None and now < _as_utc(mission.window_end):
-                self._register_active(key, mission)
+                self._register_active(key, mission, principal_pid=principal_pid)
             return self._response(briefing, token, cached=False)
         finally:
             if self._gen_sem is not None:
                 self._gen_sem.release()
 
-    def _register_active(self, key: str, mission: Mission) -> None:
-        """Register a live mission for scheduled refresh, capped (FR-12, H-8).
+    def _register_active(
+        self, key: str, mission: Mission, *, principal_pid: str | None = None
+    ) -> None:
+        """Register a live mission for scheduled refresh, capped (FR-12, H-8, SA-01/SA-03).
 
         Refresh cost scales linearly with ``_active`` and it previously grew unboundedly
         (entries only dropped once their window ended). At the cap, evict the entry whose
         window ends soonest: it expires — and would be pruned by ``refresh_active`` —
         first, so it loses the least scheduled-refresh coverage; an evicted mission still
         briefs normally on demand (NFR-6).
+
+        SA-03: when the access gate is on, a principal that already owns
+        ``budget_active_per_principal`` in-range registrations gets no new one — one client can
+        no longer convert single requests into unbounded recurring background work. The briefing
+        itself is unaffected (it was already generated); it just isn't scheduled for refresh.
         """
+        settings = get_settings()
+        if (
+            auth_active(settings)
+            and principal_pid is not None
+            and key not in self._active
+        ):
+            owned = sum(1 for reg in self._active.values() if reg.pid == principal_pid)
+            if owned >= settings.budget_active_per_principal:
+                return  # over per-principal quota — do not create recurring refresh work
         if key not in self._active and len(self._active) >= self._active_max:
             soonest = min(
                 self._active, key=lambda k: _as_utc(self._active[k].mission.window_end)
             )
             del self._active[soonest]
-        self._active[key] = _Registered(mission=mission, frame=False, key=key)
+        self._active[key] = _Registered(
+            mission=mission, frame=False, key=key, pid=principal_pid
+        )
 
     def get_result(self, key: str) -> BriefingResult | None:
         """Return the cached engine result for ``key``, or None on miss.
