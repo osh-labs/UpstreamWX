@@ -115,6 +115,18 @@ def verify(token: str | None, secrets: list[str], *, now: float | None = None) -
     return Principal(pid=pid, tier=str(payload.get("tier") or "anon"))
 
 
+def auth_active(settings: Settings) -> bool:
+    """Whether the access gate is actually enforcing (SA-01).
+
+    Secret-gated activation: the gate is on by default (``api_auth_enabled``) but only ENFORCES
+    when a signing secret is present, so the secretless contexts (dev, CLI, the offline test
+    suite, the tailnet beta) run open without a crash, while the public host activates the gate
+    simply by setting ``UPSTREAMWX_SESSION_SECRET``. The single source of truth used by the
+    middleware, the ``require_session`` dependency, budget charging, and refresh registration.
+    """
+    return bool(settings.api_auth_enabled and settings.session_secret)
+
+
 def session_secrets(settings: Settings) -> list[str]:
     """The accepted signing secrets (current first, then the verify-only previous)."""
     return [s for s in (settings.session_secret, settings.session_secret_prev) if s]
@@ -151,13 +163,13 @@ def set_session_cookie(response: Response, token: str, *, ttl: int, secure: bool
 def require_session(request: Request) -> Principal:
     """FastAPI dependency: the authenticated :class:`Principal` for a gated endpoint.
 
-    When the gate is disabled (``api_auth_enabled=0`` — the tailnet beta and the offline
-    tests) it returns a synthetic open-tier principal so handlers and budgets are no-ops.
-    When enabled it returns the principal the :class:`SessionMiddleware` already verified and
+    When the gate is inactive (disabled, or no secret configured — the tailnet beta and the
+    offline tests) it returns a synthetic open-tier principal so handlers and budgets are no-ops.
+    When active it returns the principal the :class:`SessionMiddleware` already verified and
     stashed on the ASGI scope; a missing one is a 401 (defence in depth behind the middleware,
     which already blocks unauthenticated requests to gated paths).
     """
-    if not get_settings().api_auth_enabled:
+    if not auth_active(get_settings()):
         return Principal(pid="anon", tier="open")
     principal = request.scope.get("uwx_principal")
     if not isinstance(principal, Principal):

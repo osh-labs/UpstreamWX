@@ -45,6 +45,7 @@ from ..grib import cache as grib_cache
 from ..sitrep.frame import _SYSTEM_PROMPT, DEFAULT_MODEL, _structured_view
 from .auth import (
     Principal,
+    auth_active,
     mint,
     read_token,
     require_session,
@@ -226,7 +227,7 @@ def _charge_cost(kind: str, principal: Principal) -> None:
     Cache hits never call this — only confirmed work does.
     """
     settings = get_settings()
-    if not settings.api_auth_enabled:
+    if not auth_active(settings):
         return
     per_principal, pp_window, global_limit, g_window = _budget_spec(kind, settings)
     try:
@@ -352,7 +353,7 @@ class _SessionMiddleware:
             return await self.app(scope, receive, send)
         settings = get_settings()
         path = scope.get("path", "")
-        if settings.api_auth_enabled and path.startswith("/v1/") and path not in (
+        if auth_active(settings) and path.startswith("/v1/") and path not in (
             _SESSION_EXEMPT_PATHS
         ):
             token = read_token(_ScopeRequest(scope))
@@ -369,12 +370,20 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     task: asyncio.Task | None = None
     stop = asyncio.Event()
     settings = get_settings()
-    # Fail closed (SA-01): the gate must never run with a missing/blank signing secret, or it
-    # would issue forgeable tokens. Refuse startup instead — a loud, correct failure.
-    if settings.api_auth_enabled and not settings.session_secret:
+    # Access gate startup posture (SA-01). Secret-gated activation: on by default, but the gate
+    # only enforces when a signing secret is present.
+    #   * api_auth_required + no secret  -> FAIL CLOSED: a host that means to gate must never
+    #     silently ship open because the secret was forgotten.
+    #   * enabled + no secret            -> run OPEN, but WARN loudly (dev/CLI/test/tailnet case).
+    if settings.api_auth_required and not settings.session_secret:
         raise RuntimeError(
-            "api_auth_enabled is set but UPSTREAMWX_SESSION_SECRET is empty — refusing to "
-            "start the access gate without a signing secret (SA-01)."
+            "api_auth_required is set but UPSTREAMWX_SESSION_SECRET is empty — refusing to start "
+            "open (SA-01). Set a signing secret, or clear api_auth_required for an open host."
+        )
+    if settings.api_auth_enabled and not settings.session_secret:
+        logger.warning(
+            "access gate is enabled but UPSTREAMWX_SESSION_SECRET is unset — /v1 endpoints are "
+            "running OPEN (gate inactive). Set a signing secret to activate the gate (SA-01)."
         )
     # Fresh rate-limit buckets + budgets per app run: a no-op in production (one lifespan per
     # process) that also isolates TestClient contexts from each other without env plumbing.
@@ -504,6 +513,9 @@ def health() -> dict:
             "active_missions_max": settings.api_active_missions_max,
             "warm_pending_max": settings.api_warm_pending_max,
             "rate_limits_enabled": settings.api_rate_limits_enabled,
+            # Whether the access gate is actually enforcing — lets monitoring catch a public host
+            # accidentally running open (enabled but no signing secret configured), SA-01/SA-12.
+            "auth_active": auth_active(settings),
             "cache_max_bytes": settings.api_cache_max_bytes,
             "static_entry_ttl_s": settings.api_static_entry_ttl_s,
             "max_request_bytes": settings.api_max_request_bytes,
@@ -526,7 +538,7 @@ def create_session(request: Request, response: Response) -> dict:
     identical on the tailnet beta and the public host.
     """
     settings = get_settings()
-    if not settings.api_auth_enabled:
+    if not auth_active(settings):
         return {"ok": True, "auth": False}
     _enforce_rate_limit(_session_mint_limiter, request)
     secret = settings.session_secret

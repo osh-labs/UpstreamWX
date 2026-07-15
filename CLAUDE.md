@@ -381,12 +381,16 @@ cap logs a WARNING) rolling windows on cold briefings / framing / PDF / warm —
 the existing per-IP token buckets (SA-02) remain the IP-aggregate layer beneath, defeating token
 rotation. Refresh registration is now capped **per principal** (`budget_active_per_principal`),
 delivering the "register only authorized principals" half of SA-03. Also folded in from SA-12: `/docs`
-off by default (`docs_enabled`) and the standalone `main()` binds loopback. The whole gate is behind
-`api_auth_enabled` (**default OFF** — the tailnet beta and the offline suite are unchanged; enabling is
-a reversible env flip that fails closed without `UPSTREAMWX_SESSION_SECRET`). In-process counters
-(single-worker deployment; the shared-store version is the same M0.1.1 upgrade the cache documents).
-Deferred: proof-of-work mint hardening (GA) and the `/v1/health` field trim. Does **not** fix SA-04 or
-SA-02 (separate). Engine output unchanged (NFR-4).
+off by default (`docs_enabled`) and the standalone `main()` binds loopback. **Secret-gated activation:**
+`api_auth_enabled` defaults **ON**, but the gate only ENFORCES when a signing secret is present
+(`auth_active()` = enabled ∧ secret) — so the secretless contexts (dev, CLI, the offline suite, the
+tailnet beta) run **open** with a startup WARNING instead of crashing, while the public host activates
+the gate simply by setting `UPSTREAMWX_SESSION_SECRET`. `api_auth_required=1` makes a secretless start
+**fail closed** (the public host sets it, so a config slip can't silently ship `/v1` open); `/v1/health`
+echoes `auth_active` so monitoring catches an accidentally-open host. In-process counters (single-worker
+deployment; the shared-store version is the same M0.1.1 upgrade the cache documents). Deferred:
+proof-of-work mint hardening (GA) and the `/v1/health` field trim. Does **not** fix SA-04 or SA-02
+(separate). Engine output unchanged (NFR-4).
 
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP

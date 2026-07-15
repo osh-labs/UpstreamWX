@@ -24,8 +24,15 @@
   (467 passed), ruff clean, and the gate verified end-to-end against a live uvicorn (401 without a
   session on a direct port hit → 200 after mint).
 - Deploy: `deploy/upstreamwx.env.example` documents the gate/secret/budget vars; the nginx template
-  adds a strict per-IP mint zone. Everything is behind `api_auth_enabled` (default OFF) — a reversible
-  config flip, zero change to the tailnet beta or the test suite until enabled.
+  adds a strict per-IP mint zone.
+
+**Activation model (updated): the gate is ON by default but secret-gated.** `api_auth_enabled`
+defaults to `True`; the gate only *enforces* when a signing secret is configured (`auth_active()` =
+`api_auth_enabled ∧ session_secret`). So the public host activates it just by setting
+`UPSTREAMWX_SESSION_SECRET`, while the secretless contexts (dev, CLI, the offline suite, the tailnet
+beta) run **open** with a loud startup WARNING rather than crashing — the on-by-default default that
+can't break those paths. `api_auth_required=1` makes a secretless start *fail closed* for production,
+and `/v1/health.limits.auth_active` surfaces whether the gate is actually enforcing.
 
 **Deferred (as planned):** the proof-of-work mint hardening (§5.8, GA-time, flag-off) and the
 `/v1/health` field trim (SA-12) are not in this pass — the health trim would churn the SA-02 health

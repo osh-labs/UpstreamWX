@@ -159,22 +159,51 @@ def test_secret_rotation_accepts_previous():
     assert auth.verify(old, ["new-secret"]) is None  # once prev is dropped, it stops verifying
 
 
-# -- fail-closed: gate on with no secret refuses to start ----------------------------------
-def test_fail_closed_without_secret(monkeypatch):
+# -- secret-gated activation & fail-closed -------------------------------------------------
+def test_enabled_without_secret_runs_open(monkeypatch):
+    """On by default, but with NO secret the gate is inactive: /v1 runs open, no session needed."""
     monkeypatch.setenv("UPSTREAMWX_API_ENABLE_SCHEDULER", "0")
     monkeypatch.setenv("UPSTREAMWX_API_ENABLE_WARM", "0")
     monkeypatch.setenv("UPSTREAMWX_API_AUTH_ENABLED", "1")
+    monkeypatch.delenv("UPSTREAMWX_SESSION_SECRET", raising=False)
+    monkeypatch.delenv("UPSTREAMWX_API_AUTH_REQUIRED", raising=False)
+    service.cache.clear()
+    with TestClient(app) as c:
+        assert c.get("/v1/health").json()["limits"]["auth_active"] is False
+        assert c.post("/v1/briefing", json=_base()).status_code == 200  # no session required
+    service.cache.clear()
+
+
+def test_auth_required_fails_closed_without_secret(monkeypatch):
+    """A host that DEMANDS the gate refuses to start with no secret, rather than run open."""
+    monkeypatch.setenv("UPSTREAMWX_API_ENABLE_SCHEDULER", "0")
+    monkeypatch.setenv("UPSTREAMWX_API_ENABLE_WARM", "0")
+    monkeypatch.setenv("UPSTREAMWX_API_AUTH_REQUIRED", "1")
     monkeypatch.delenv("UPSTREAMWX_SESSION_SECRET", raising=False)
     with pytest.raises(RuntimeError, match="SESSION_SECRET"):
         with TestClient(app):
             pass
 
 
-# -- regression: gate OFF (default) needs no session ---------------------------------------
+def test_active_when_secret_present(monkeypatch):
+    """With enabled (default) + a secret, the gate enforces — health reports it active."""
+    monkeypatch.setenv("UPSTREAMWX_API_ENABLE_SCHEDULER", "0")
+    monkeypatch.setenv("UPSTREAMWX_API_ENABLE_WARM", "0")
+    monkeypatch.setenv("UPSTREAMWX_SESSION_SECRET", _SECRET)
+    monkeypatch.setenv("UPSTREAMWX_SESSION_COOKIE_SECURE", "0")
+    service.cache.clear()
+    with TestClient(app) as c:
+        assert c.get("/v1/health").json()["limits"]["auth_active"] is True
+        assert c.post("/v1/briefing", json=_base()).status_code == 401  # gate on by default now
+    service.cache.clear()
+
+
+# -- regression: explicit kill-switch (enabled=0) needs no session -------------------------
 def test_gate_off_needs_no_session(monkeypatch):
     monkeypatch.setenv("UPSTREAMWX_API_ENABLE_SCHEDULER", "0")
     monkeypatch.setenv("UPSTREAMWX_API_ENABLE_WARM", "0")
     monkeypatch.setenv("UPSTREAMWX_API_AUTH_ENABLED", "0")
+    monkeypatch.setenv("UPSTREAMWX_SESSION_SECRET", _SECRET)  # present but disabled → still open
     service.cache.clear()
     with TestClient(app) as c:
         assert c.post("/v1/briefing", json=_base()).status_code == 200

@@ -200,18 +200,29 @@ class Settings(BaseSettings):
     )
 
     # ── Public-release access gate: anonymous fair-use sessions (SA-01) ───────────────────
-    # Master switch for the whole gate. Default OFF so the tailnet private beta and the
-    # hermetic offline test suite behave exactly as before; the public host sets it to 1.
-    # When ON, every expensive /v1/* endpoint requires a valid session token and per-principal
-    # + global cost budgets apply. The audit's point: IP-only throttling is "weak identity";
-    # this attaches budgets to an app-issued principal instead. See api/auth.py, api/budget.py.
-    api_auth_enabled: bool = False
+    # Master switch, default ON. But the gate is only ACTIVE when a signing secret is also set
+    # (see session_secret) — this "secret-gated activation" is what lets on-by-default coexist
+    # with the secretless contexts (dev, CLI, the hermetic test suite, the tailnet beta): no
+    # secret → the gate stays inactive and /v1 runs open (with a startup WARNING), rather than
+    # crashing. The public host just sets UPSTREAMWX_SESSION_SECRET and the gate turns itself on.
+    # Set to 0 to force the gate off even where a secret exists (an operational kill-switch).
+    # When active, every expensive /v1/* endpoint requires a valid session token and
+    # per-principal + global cost budgets apply. The audit's point: IP-only throttling is "weak
+    # identity"; this attaches budgets to an app-issued principal. See api/auth.py, api/budget.py.
+    api_auth_enabled: bool = True
+
+    # Fail-closed guard for production (default OFF). When set, a missing/blank session_secret
+    # makes the app REFUSE to start instead of running open — so a public host that means to gate
+    # can never silently ship unauthenticated because someone forgot the secret. Left off for
+    # dev/CLI/tests/tailnet, which legitimately run open without a secret.
+    api_auth_required: bool = False
 
     # HMAC signing secret for the stateless anonymous session tokens. Read as
     # UPSTREAMWX_SESSION_SECRET (32+ random bytes: `openssl rand -hex 32`); lives in the runtime
-    # EnvironmentFile beside ANTHROPIC_API_KEY, never in git. FAIL-CLOSED: when api_auth_enabled
-    # is on and no secret is set, the app refuses to start (lifespan) rather than issue forgeable
-    # tokens. *_prev is verify-only, so the secret can be rotated with zero session loss.
+    # EnvironmentFile beside ANTHROPIC_API_KEY, never in git. Presence is what ACTIVATES the gate
+    # (see api_auth_enabled): with it set the gate enforces, without it /v1 runs open (unless
+    # api_auth_required forces a fail-closed startup). *_prev is verify-only, so the secret can be
+    # rotated with zero session loss.
     session_secret: str | None = Field(
         default=None, validation_alias=AliasChoices("UPSTREAMWX_SESSION_SECRET")
     )

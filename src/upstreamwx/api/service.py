@@ -26,6 +26,7 @@ from ..sitrep.generate import GeneratedBriefing, generate_briefing
 from ..sitrep.structured import to_structured
 from ..watershed.cache import _key as watershed_key
 from ..watershed.cache import delineate_cached
+from .auth import auth_active
 from .cache import STATIC_TOKEN, BoundedLRU, BriefingCache, _estimate_bytes, mission_cache_key
 from .cycles import cycle_key
 from .models import BriefingResponse, MissionSpec
@@ -241,7 +242,7 @@ class BriefingService:
         """
         settings = get_settings()
         if (
-            settings.api_auth_enabled
+            auth_active(settings)
             and principal_pid is not None
             and key not in self._active
         ):
