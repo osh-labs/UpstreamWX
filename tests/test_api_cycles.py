@@ -89,10 +89,23 @@ def test_mission_key_stability_and_sensitivity():
         start="2026-06-20T08:00", end="2026-06-20T18:00", slot=True,
     )
     m1 = spec.to_mission()
-    m2 = spec.model_copy(update={"name": "renamed"}).to_mission()
-    assert mission_cache_key(m1) == mission_cache_key(m2)  # name is not part of identity
+    # SA-04: user-supplied metadata IS part of identity now — the rendered briefing prints
+    # mission.name, so two differently-labelled missions must not collide on one cache entry
+    # (else the second requester is served the first's name/presentation). This replaces the
+    # former "name is not part of identity" assertion.
+    assert mission_cache_key(m1) != mission_cache_key(
+        spec.model_copy(update={"name": "renamed"}).to_mission()
+    )
+    assert mission_cache_key(m1) != mission_cache_key(
+        spec.model_copy(update={"party_size": 4}).to_mission()
+    )
+    assert mission_cache_key(m1) != mission_cache_key(
+        spec.model_copy(update={"route_note": "via the narrows"}).to_mission()
+    )
+    # A byte-identical spec still keys stably (a reopened pin is a hit).
+    assert mission_cache_key(m1) == mission_cache_key(spec.to_mission())
     moved = spec.model_copy(update={"lat": 38.0}).to_mission()
-    assert mission_cache_key(m1) != mission_cache_key(moved)  # location is
+    assert mission_cache_key(m1) != mission_cache_key(moved)  # location is too
 
 
 def _offline_service(monkeypatch) -> BriefingService:
