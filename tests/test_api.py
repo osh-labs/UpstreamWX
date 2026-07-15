@@ -79,6 +79,12 @@ def test_health(client):
         "active_missions_max",
         "warm_pending_max",
         "rate_limits_enabled",
+        # SA-02 resource controls
+        "cache_max_bytes",
+        "static_entry_ttl_s",
+        "max_request_bytes",
+        "allow_inputs_replay",
+        "briefing_miss_rate_per_min",
     }
     assert isinstance(limits["decode_pool"], bool)
     assert isinstance(limits["decode_cache_max_bytes"], int)

@@ -32,8 +32,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
@@ -44,7 +45,7 @@ from .cache import mission_cache_key
 from .cycles import cycle_key, next_cycle
 from .models import BriefingResponse, MissionSpec, MissionWindowError, WatershedWarmRequest
 from .scheduler import run_scheduler
-from .service import BriefingBusy, BriefingService, WarmQueueFull
+from .service import BriefingBusy, BriefingService, InputsReplayDisabled, WarmQueueFull
 
 logger = logging.getLogger("upstreamwx.api")
 
@@ -134,6 +135,10 @@ class _TokenBucketLimiter:
 _frame_limiter = _TokenBucketLimiter(_FRAME_RATE_PER_MIN)
 _pdf_limiter = _TokenBucketLimiter(_PDF_RATE_PER_MIN)
 _warm_limiter = _TokenBucketLimiter(_WARM_RATE_PER_MIN)
+# Per-IP budget for cold /v1/briefing generations (cache MISSES), SA-02. Cache hits are free —
+# only confirmed cold work is charged (see service.get_briefing's on_miss hook). The rate comes
+# from settings so a deployment can tune it; the limiter is gated by api_rate_limits_enabled.
+_briefing_miss_limiter = _TokenBucketLimiter(get_settings().api_briefing_miss_rate_per_min)
 
 
 def _client_ip(request: Request) -> str:
@@ -169,6 +174,71 @@ def _enforce_rate_limit(limiter: _TokenBucketLimiter, request: Request) -> None:
         )
 
 
+# -----------------------------------------------------------------------------------------
+# Application-level request-body cap for the JSON mission endpoints (SA-02).
+#
+# nginx caps the deployed edge (client_max_body_size), but the standalone uvicorn entry point
+# has no edge and an edge config can drift, so the app enforces its own bound. A real
+# MissionSpec is a few KB even with a full inputs vector; anything larger is an abuse payload.
+# Pure-ASGI so the body is rejected BEFORE FastAPI parses the typed model: the Content-Length
+# header is prechecked (cheap, present on normal requests) and the streamed body is counted
+# (authoritative for chunked uploads that omit Content-Length). The PDF endpoint keeps its own
+# larger 2 MiB cap and is deliberately excluded here.
+# -----------------------------------------------------------------------------------------
+_BODY_LIMITED_PATHS = frozenset({"/v1/briefing", "/v1/briefing/frame", "/v1/watershed/warm"})
+
+
+class _MaxBodySizeMiddleware:
+    """Reject oversized request bodies on the mission endpoints before parsing (SA-02, 413)."""
+
+    def __init__(self, app: object, *, max_bytes: int) -> None:
+        self.app = app
+        self._max_bytes = max_bytes
+
+    async def _reject(self, send) -> None:
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 413,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": b'{"detail":"Request body too large."}'})
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope["type"] != "http" or scope.get("path") not in _BODY_LIMITED_PATHS:
+            return await self.app(scope, receive, send)
+        # Cheap Content-Length precheck (absent on chunked uploads).
+        for name, value in scope.get("headers") or ():
+            if name == b"content-length" and value.isdigit() and int(value.decode()) > (
+                self._max_bytes
+            ):
+                return await self._reject(send)
+        # Authoritative check: buffer the body up to the cap, then replay it downstream. The cap
+        # is tiny (KB), so full buffering is trivial; a body that grows past it is rejected.
+        body = b""
+        more = True
+        while more:
+            message = await receive()
+            if message["type"] != "http.request":
+                break
+            body += message.get("body", b"")
+            more = message.get("more_body", False)
+            if len(body) > self._max_bytes:
+                return await self._reject(send)
+
+        replayed = False
+
+        async def _replay():
+            nonlocal replayed
+            if not replayed:
+                replayed = True
+                return {"type": "http.request", "body": body, "more_body": False}
+            return await receive()
+
+        return await self.app(scope, _replay, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the cycle-aligned refresh scheduler for the app's lifetime (FR-12)."""
@@ -177,7 +247,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     # Fresh rate-limit buckets per app run: a no-op in production (one lifespan per
     # process) that also isolates TestClient contexts from each other without env plumbing.
-    for limiter in (_frame_limiter, _pdf_limiter, _warm_limiter):
+    for limiter in (_frame_limiter, _pdf_limiter, _warm_limiter, _briefing_miss_limiter):
         limiter.reset()
     if settings.api_enable_scheduler:
         task = asyncio.create_task(run_scheduler(service, stop=stop))
@@ -224,6 +294,35 @@ app = FastAPI(
     summary="Mission-specific multi-hazard weather briefings (reference only).",
     lifespan=lifespan,
 )
+# Reject oversized mission-endpoint bodies before the handlers parse them (SA-02).
+app.add_middleware(_MaxBodySizeMiddleware, max_bytes=get_settings().api_max_request_bytes)
+
+
+def _json_safe(obj: object) -> object:
+    """Replace non-finite floats with a string marker so an error body stays JSON-serializable."""
+    if isinstance(obj, float):
+        return obj if math.isfinite(obj) else repr(obj)  # inf / nan -> "inf" / "nan"
+    if isinstance(obj, dict):
+        return {k: _json_safe(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_json_safe(v) for v in obj]
+    return obj
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Return a bounded, always-serializable 422 for invalid request bodies (SA-02).
+
+    A JSON body can carry non-finite floats — the ``Infinity``/``NaN`` tokens, or ``1e400`` —
+    which parse to ``inf``/``nan`` and validate (correctly) as errors, but then land in the
+    error detail's echoed ``input``. The default strict-JSON error response (``allow_nan=False``)
+    then raises while rendering, turning a clean 422 into a 500. Sanitising the encoded errors
+    keeps the 422 bounded and serializable, mirroring the ``/v1/briefing/pdf`` handler's intent.
+    """
+    detail = _json_safe(jsonable_encoder(exc.errors()))
+    return JSONResponse(status_code=422, content={"detail": detail})
 
 
 @app.get("/v1/health")
@@ -257,12 +356,17 @@ def health() -> dict:
             "active_missions_max": settings.api_active_missions_max,
             "warm_pending_max": settings.api_warm_pending_max,
             "rate_limits_enabled": settings.api_rate_limits_enabled,
+            "cache_max_bytes": settings.api_cache_max_bytes,
+            "static_entry_ttl_s": settings.api_static_entry_ttl_s,
+            "max_request_bytes": settings.api_max_request_bytes,
+            "allow_inputs_replay": settings.api_allow_inputs_replay,
+            "briefing_miss_rate_per_min": settings.api_briefing_miss_rate_per_min,
         },
     }
 
 
 @app.post("/v1/briefing", response_model=BriefingResponse)
-def briefing(spec: MissionSpec) -> BriefingResponse:
+def briefing(spec: MissionSpec, request: Request) -> BriefingResponse:
     """Generate (or return a cached) briefing for a mission spec.
 
     Non-mandatory source outages degrade gracefully (NFR-6): the briefing still renders
@@ -271,13 +375,21 @@ def briefing(spec: MissionSpec) -> BriefingResponse:
 
     When the host is at its concurrent-generation cap, returns 503 with ``Retry-After`` so the
     PWA shows a "busy — retry" banner instead of every request piling on and OOM-ing the host.
-    A live window outside the serviceable forecast horizon is a 422 (H-8); no rate limit here —
-    cache hits must stay cheap, and cold generations are already bounded by the busy cap.
+    A live window outside the serviceable forecast horizon is a 422 (H-8). A disabled offline
+    replay path is a 403 (SA-02). Cache hits stay free; only cold cache MISSES are charged
+    against a per-IP cost budget (429 + Retry-After when over, SA-02) — see the ``on_miss`` hook.
     """
     try:
-        return service.get_briefing(spec)
+        return service.get_briefing(
+            spec, on_miss=lambda: _enforce_rate_limit(_briefing_miss_limiter, request)
+        )
     except MissionWindowError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from None
+    except InputsReplayDisabled:
+        raise HTTPException(
+            status_code=403,
+            detail="The offline inputs replay path is disabled on this server.",
+        ) from None
     except BriefingBusy:
         raise HTTPException(
             status_code=503,
@@ -303,6 +415,11 @@ async def frame_stream(spec: MissionSpec, request: Request) -> StreamingResponse
     terminal event carries ``{"done": true}``.
     """
     _enforce_rate_limit(_frame_limiter, request)
+    if spec.inputs is not None and not get_settings().api_allow_inputs_replay:
+        raise HTTPException(
+            status_code=403,
+            detail="The offline inputs replay path is disabled on this server.",
+        )
     api_key = get_settings().anthropic_api_key
     if not api_key:
         return Response(status_code=204)
