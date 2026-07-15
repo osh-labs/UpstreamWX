@@ -142,6 +142,9 @@ class Settings(BaseSettings):
     # ~2 cycles of recurring work, not the up-to-17-days a 10-day-out, 7-day window allowed. A
     # reopened (actively planned) mission stays warm. Default 12 h ≈ two 6-hourly cycles; a
     # pruned mission still briefs on demand (NFR-6). 0 disables the gate (refresh until window end).
+    # Keep this >= the cache-cycle length (~6 h): below it, a mission could go stale-and-pruned
+    # while its cache entry is still valid, so a re-view (a cache hit) would not re-register it for
+    # refresh — it would only re-register on the next cold miss. Fails toward on-demand (NFR-6).
     api_active_refresh_ttl_s: float = 12 * 3600.0
 
     # Hard per-pass caps for the scheduled refresh (SA-03) so one pass can never run unbounded

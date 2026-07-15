@@ -86,13 +86,14 @@ async def run_scheduler(service: BriefingService, *, stop: asyncio.Event | None 
             s = service.last_refresh_stats
             logger.info(
                 "scheduled refresh: regenerated=%d registry=%d pruned_ended=%d pruned_stale=%d "
-                "deferred=%d skipped_budget=%d duration=%.2fs",
+                "deferred=%d skipped_budget=%d failed=%d duration=%.2fs",
                 count,
                 s.registry_size,
                 s.pruned_ended,
                 s.pruned_stale,
                 s.deferred,
                 s.skipped_budget,
+                s.failed,
                 s.duration_s,
             )
         except Exception:  # noqa: BLE001 — one bad cycle must not kill the scheduler

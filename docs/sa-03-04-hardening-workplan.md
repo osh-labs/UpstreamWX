@@ -232,11 +232,15 @@ Each refresh regeneration acquires `_gen_sem` with `timeout=api_refresh_gen_wait
 records `deferred` and stops (host busy with interactive work). No-op coordination when `_gen_sem` is
 disabled (`briefing_max_concurrency <= 0`), but the item/time budget still applies.
 
-### WS-6 — SA-03: metrics + health
+### WS-6 — SA-03: per-mission resilience + metrics + health
 
 **Files:** `service.py`, `scheduler.py`, `app.py`.
 
-- `RefreshStats` frozen dataclass; `service.last_refresh_stats` property; scheduler logs it each pass.
+- Each refresh regeneration is wrapped in a per-mission `try/except` so one bad mission is counted
+  (`RefreshStats.failed`) and logged, and the pass continues instead of aborting (NFR-6). The item
+  budget counts attempts (successes + failures) so a high-failure pass still stops at the cap.
+- `RefreshStats` frozen dataclass (incl. `failed`); `service.last_refresh_stats` property, recorded
+  **always** (even after failures) so the surfaced stats are never stale; scheduler logs it each pass.
 - `/v1/health` gains a compact `refresh` block (last-pass counts + registry size) and the new limits echo
   the TTL / pass caps. Counts only — SA-12-safe.
 

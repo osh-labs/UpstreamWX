@@ -103,6 +103,7 @@ def test_health(client):
         "pruned_stale",
         "deferred",
         "skipped_budget",
+        "failed",
         "duration_s",
     }
 

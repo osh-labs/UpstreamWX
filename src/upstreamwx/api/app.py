@@ -514,6 +514,7 @@ def health() -> dict:
             "pruned_stale": stats.pruned_stale,
             "deferred": stats.deferred,
             "skipped_budget": stats.skipped_budget,
+            "failed": stats.failed,
             "duration_s": stats.duration_s,
         },
         "limits": {

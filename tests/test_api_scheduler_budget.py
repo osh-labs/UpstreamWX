@@ -141,6 +141,33 @@ def test_refresh_defers_when_generation_slots_are_busy(monkeypatch):
     assert service.active_count == 1  # deferred, not pruned — it refreshes next cycle
 
 
+# -- Per-mission resilience: one bad mission must not sink the pass (rec 7 / NFR-6) ----------
+
+def test_refresh_survives_one_failing_mission(monkeypatch):
+    """A mission whose generation raises is counted as failed; the rest still refresh."""
+    service = _offline_service(monkeypatch)
+    t0 = _utc(2026, 6, 19, 12)
+    for i in range(3):
+        service.get_briefing(_spec(name=f"m{i}", lat=37.0 + i * 0.1), now=t0)
+    assert service.active_count == 3
+
+    # Make exactly the middle mission's generation blow up.
+    bad_key = mission_cache_key(_spec(name="m1", lat=37.1).to_mission())
+    real = generate_mod.generate_briefing
+
+    def flaky(mission, *, inputs=None, frame=None, generated_at=None, cycle=None):
+        if mission_cache_key(mission) == bad_key:
+            raise RuntimeError("boom")
+        return real(mission, inputs=HazardInputs(), frame=False, generated_at=generated_at)
+
+    monkeypatch.setattr("upstreamwx.api.service.generate_briefing", flaky)
+
+    regenerated = service.refresh_active(now=t0 + timedelta(hours=1))
+    assert regenerated == 2  # the two healthy missions still refreshed
+    assert service.last_refresh_stats.failed == 1  # the bad one counted, not fatal
+    assert service.active_count == 3  # a failed regen does not drop the registration
+
+
 # -- WS-2: registry lock under concurrency ---------------------------------------------------
 
 def test_registry_survives_concurrent_register_touch_refresh(monkeypatch):

@@ -94,6 +94,7 @@ class RefreshStats:
     pruned_stale: int = 0
     deferred: int = 0
     skipped_budget: int = 0
+    failed: int = 0
     duration_s: float = 0.0
 
 
@@ -404,10 +405,12 @@ class BriefingService:
                 key=lambda km: _as_utc(km[1].window_end),
             )
 
-        regenerated = deferred = skipped_budget = 0
+        regenerated = deferred = skipped_budget = failed = 0
         for i, (key, mission) in enumerate(snapshot):
             remaining = len(snapshot) - i
-            if (max_items and regenerated >= max_items) or (
+            # Budget counts attempts (successes + failures), so a high-failure pass still stops
+            # at the item cap rather than churning the whole registry.
+            if (max_items and regenerated + failed >= max_items) or (
                 deadline is not None and time.monotonic() >= deadline
             ):
                 skipped_budget = remaining  # left for the next pass / on demand (NFR-6)
@@ -419,13 +422,19 @@ class BriefingService:
                 break
             try:
                 briefing = generate_briefing(mission, frame=False, generated_at=now)
+                self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
+                self.cache.put(key, briefing, token)
+            except Exception:  # noqa: BLE001 — one bad mission must not sink the whole pass (NFR-6)
+                failed += 1
+                logger.exception("scheduled refresh failed for mission %s", key)
+            else:
+                regenerated += 1
             finally:
                 if self._gen_sem is not None:
                     self._gen_sem.release()
-            self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
-            self.cache.put(key, briefing, token)
-            regenerated += 1
 
+        # Always record the pass outcome (even after per-mission failures) so /v1/health and the
+        # journal reflect the latest pass, not a stale one (SA-03 rec 7).
         self._last_refresh_stats = RefreshStats(
             registry_size=registry_size,
             regenerated=regenerated,
@@ -433,6 +442,7 @@ class BriefingService:
             pruned_stale=pruned_stale,
             deferred=deferred,
             skipped_budget=skipped_budget,
+            failed=failed,
             duration_s=round(time.monotonic() - start, 3),
         )
         return regenerated

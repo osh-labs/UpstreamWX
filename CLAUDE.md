@@ -412,7 +412,9 @@ but *not* by a refresh — `api_active_refresh_ttl_s`, default 12 h ≈ two cycl
 request stops refreshing after the TTL, not after days); each pass has a **hard item + wall-clock
 budget** (`api_refresh_pass_max_items`/`_seconds`) and **shares the request `_gen_sem`**, yielding to
 interactive briefings on slot contention (`api_refresh_gen_wait_s`) so scheduled work never starves a
-real request; and a per-pass `RefreshStats` is logged and echoed on `/v1/health` (rec 7). SA-01
+real request; each regeneration is per-mission try/excepted so one bad mission can't sink the pass
+(NFR-6); and a per-pass `RefreshStats` (incl. a `failed` count) is logged and echoed on `/v1/health`
+(rec 7). SA-01
 already delivered the per-principal registration cap (the "register only authorized principals"
 half). The 256 registry cap is now a memory ceiling, not the work bound (the TTL + pass budget are).
 Full offline suite green (480); does **not** fold in SA-05/06 or the deferred conditions-cache split.
