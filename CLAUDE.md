@@ -343,6 +343,26 @@ degrades behind the quorum; `gefs/cache.py` self-heals any bad file already on d
 re-fetch once); and `gefs_provider._member_sample` catches `EOFError`. Applies to REFS too (same
 download path). Engine output unchanged (NFR-4).
 
+**Mission-input & cache hardening (SA-02, 2026-07-14).** Following the pre-release security audit
+(`docs/Security Audit 2026-07-14.md`; workplan `docs/sa-02-hardening-workplan.md`), the public
+`/v1/briefing` surface is bounded end to end so unbounded mission input can no longer exhaust
+memory through count-only caches. Backend-only (nothing in `frontend/`): `MissionSpec` caps `name`
+(80), `route_note` (1000), `party_size` (1–200); the untyped `inputs: dict` is now a strict
+`HazardInputsSpec` (`extra="forbid"`, `allow_inf_nan=False`, ranged probabilities, known-hazard
+`member_support`) whose `to_dataclass()` reproduces the exact engine `HazardInputs` bit-identically
+(NFR-4, FR-25) — unknown keys / non-finite / out-of-range now return a **bounded 422** (an ASGI
+`_MaxBodySizeMiddleware` first rejects >64 KiB bodies with 413, and a `RequestValidationError`
+handler keeps non-finite-float errors serializable rather than 500). The offline replay path is
+feature-flagged (`api_allow_inputs_replay`, default on for CLI/dev; **the public beta sets it to
+0** → 403, killing the never-expiring static-entry vector); the briefing + result caches are now
+byte-budget-aware (`api_cache_max_bytes`) with a TTL on static entries (`api_static_entry_ttl_s`);
+and cold `/v1/briefing` cache **misses** are charged to a per-IP token bucket
+(`api_briefing_miss_rate_per_min`) while cache hits stay free (via a `get_briefing` `on_miss` hook).
+New settings live in `config.py` and are documented in `deploy/upstreamwx.env.example`; `/v1/health`
+echoes them. SA-01 (access gate) is handled for the private beta by a tailnet and is out of scope
+here; SA-04 (cache key omits mission metadata) is separate — these bounds only shrink its blast
+radius. Engine output unchanged (NFR-4).
+
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
 (`BriefingResponse.markdown`) as formatted HTML using a zero-dependency in-browser converter

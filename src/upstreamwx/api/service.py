@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -25,7 +26,7 @@ from ..sitrep.generate import GeneratedBriefing, generate_briefing
 from ..sitrep.structured import to_structured
 from ..watershed.cache import _key as watershed_key
 from ..watershed.cache import delineate_cached
-from .cache import STATIC_TOKEN, BoundedLRU, BriefingCache, mission_cache_key
+from .cache import STATIC_TOKEN, BoundedLRU, BriefingCache, _estimate_bytes, mission_cache_key
 from .cycles import cycle_key
 from .models import BriefingResponse, MissionSpec
 
@@ -55,6 +56,16 @@ class WarmQueueFull(Exception):
     """
 
 
+class InputsReplayDisabled(Exception):
+    """Raised when an ``inputs`` replay is requested but disabled on this server (SA-02 → 403).
+
+    The offline HazardInputs replay path (FR-25) skips live ingest and creates non-expiring
+    static cache entries — the durable half of the SA-02 memory-exhaustion vector. Ordinary PWA
+    users never send ``inputs``, so the public beta sets ``api_allow_inputs_replay=0`` and the
+    service refuses such requests before any work; CLI/dev keep it on for reproducible replays.
+    """
+
+
 @dataclass
 class _Registered:
     """A live mission tracked for scheduled refresh while its window is in range."""
@@ -70,7 +81,14 @@ class BriefingService:
     def __init__(self, cache: BriefingCache | None = None) -> None:
         settings = get_settings()
         maxsize = settings.api_cache_max_entries
-        self.cache = cache or BriefingCache(maxsize=maxsize)
+        # Bound the briefing cache on BOTH axes (SA-02): entry count and estimated retained
+        # bytes, with a TTL on deterministic static (inputs-replay) entries so a pinned replay
+        # cannot persist for the process lifetime. Count caps alone don't bound memory.
+        self.cache = cache or BriefingCache(
+            maxsize=maxsize,
+            maxbytes=settings.api_cache_max_bytes,
+            static_ttl_s=settings.api_static_entry_ttl_s,
+        )
         # Bound concurrent cold generations so a burst can't OOM/thrash a small host. A value <= 0
         # disables the cap (an effectively unbounded semaphore). Cache hits never acquire it.
         self._gen_busy_timeout = settings.briefing_busy_timeout_s
@@ -85,7 +103,9 @@ class BriefingService:
         # framing endpoint can call Haiku without re-running ingest. LRU-bounded like the
         # briefing cache so it cannot grow unbounded on an always-on host; an evicted result
         # makes the frame endpoint a graceful miss (it re-generates on the next briefing).
-        self._result_store: BoundedLRU[BriefingResult] = BoundedLRU(maxsize)
+        self._result_store: BoundedLRU[BriefingResult] = BoundedLRU(
+            maxsize, maxbytes=settings.api_cache_max_bytes
+        )
         # Watershed warming: a bounded pool fills the pour-point cache in the background
         # the moment the planner reports a new point, de-duped by cache key so a dragged
         # marker can't flood it. Created in start_warming() (app lifespan), not at import.
@@ -128,15 +148,28 @@ class BriefingService:
 
     # -- request path ---------------------------------------------------------------
     def get_briefing(
-        self, spec: MissionSpec, *, now: datetime | None = None
+        self,
+        spec: MissionSpec,
+        *,
+        now: datetime | None = None,
+        on_miss: Callable[[], None] | None = None,
     ) -> BriefingResponse:
         """Return a briefing for ``spec``, from cache when valid or freshly generated.
 
         Raises :class:`~upstreamwx.api.models.MissionWindowError` (→ 422) for a live window
         outside the serviceable horizon, before any ingest cost is spent (H-8); offline
-        ``inputs`` replays are exempt (FR-25).
+        ``inputs`` replays are exempt (FR-25). Raises :class:`InputsReplayDisabled` (→ 403) when
+        ``inputs`` is supplied but the replay path is disabled on this server (SA-02).
+
+        ``on_miss`` (SA-02) is invoked once a cache miss is confirmed and *before* any cold
+        generation is spent, so the caller can charge a per-principal cost budget (the miss rate
+        limit) that cache hits never touch. It may raise to abort the cold path.
         """
         now = now or datetime.now(UTC)
+        # Refuse the offline replay path when disabled (SA-02) — before any work, including the
+        # wall-clock exemption ensure_current() would grant an inputs spec.
+        if spec.inputs is not None and not get_settings().api_allow_inputs_replay:
+            raise InputsReplayDisabled()
         spec.ensure_current(now)
         mission = spec.to_mission()
         inputs = spec.to_inputs()
@@ -148,6 +181,12 @@ class BriefingService:
         cached = self.cache.get(key, token)
         if cached is not None:
             return self._response(cached, token, cached=True)
+
+        # Confirmed cache miss -> cold generation. Charge the caller's cost budget first (SA-02):
+        # the hits above are free, so only work that spends live ingest is rate-limited. Raising
+        # here (e.g. 429) aborts before the generation semaphore is even acquired.
+        if on_miss is not None:
+            on_miss()
 
         # Cap concurrent cold generations: a burst of distinct missions would otherwise each spin up
         # the full ingest (watershed delineation + GEFS/REFS), spiking memory/CPU enough to OOM a
@@ -167,7 +206,7 @@ class BriefingService:
             # so the structured posture data is returned immediately without waiting for the
             # LLM call.  The engine result is stored in _result_store for the frame endpoint.
             briefing = generate_briefing(mission, inputs=inputs, frame=False, generated_at=now)
-            self._result_store.put(key, briefing.result)
+            self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
             self.cache.put(key, briefing, token)
             # Track live, still-in-range missions for the scheduler (FR-12). Deterministic
             # offline briefings need no refresh, so they are not registered.
@@ -245,7 +284,7 @@ class BriefingService:
                 del self._active[key]  # mission is over; stop refreshing it
                 continue
             briefing = generate_briefing(reg.mission, frame=False, generated_at=now)
-            self._result_store.put(key, briefing.result)
+            self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
             self.cache.put(key, briefing, token)
             regenerated += 1
         return regenerated
