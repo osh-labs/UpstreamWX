@@ -6,6 +6,31 @@
   1. **Anonymous fair-use sessions** — server-minted signed tokens, *no login and no personal data*. The gate exists to establish a **per-principal identity for cost/abuse accounting**, not to decide *who* gets in. This matches the audit's explicit public-release recommendation and preserves the "asks for no personal data" stance (see SA-10).
   2. **App-level, self-contained** — implemented in FastAPI + nginx only. No third-party IAP, no managed challenge service. Portable across tailnet / staging / the single EC2 host.
 
+## Implementation status (2026-07-15)
+
+**Phases 1–2 and the cheap SA-12 fold-ins are built, tested, and verified** on branch
+`claude/sa-01-auth-plan-zc1p9h` (rebased on the merged SA-02 hardening):
+
+- `api/auth.py` (stateless HMAC session tokens, `Principal`, `require_session`, cookie helpers)
+  and `api/budget.py` (per-principal + global rolling-window counters) are new.
+- `api/app.py` gained `_SessionMiddleware` (fail-closed by path), `POST /v1/session`, per-endpoint
+  `require_session` + budget charging, lifespan fail-closed on a missing secret, docs-off (SA-12),
+  and a loopback-default standalone bind (SA-12). `api/service.py` gates refresh registration per
+  principal (SA-03). `config.py` gained the gate/session/budget settings (all default to a no-op).
+- Frontend (`frontend/js/app.js`): transparent `ensureSession()` on boot + credentialed fetches +
+  401 re-mint/retry. The service worker needs no change (it already bypasses non-GET).
+- Tests: `tests/test_api_auth.py` + `tests/test_api_budget.py` (17 tests) cover all three acceptance
+  criteria, token integrity, rotation, mint limiting, budgets, and SA-03. Full offline suite green
+  (467 passed), ruff clean, and the gate verified end-to-end against a live uvicorn (401 without a
+  session on a direct port hit → 200 after mint).
+- Deploy: `deploy/upstreamwx.env.example` documents the gate/secret/budget vars; the nginx template
+  adds a strict per-IP mint zone. Everything is behind `api_auth_enabled` (default OFF) — a reversible
+  config flip, zero change to the tailnet beta or the test suite until enabled.
+
+**Deferred (as planned):** the proof-of-work mint hardening (§5.8, GA-time, flag-off) and the
+`/v1/health` field trim (SA-12) are not in this pass — the health trim would churn the SA-02 health
+key-set test and is low-value next to the gate itself.
+
 ## 1. What "authentication" means here (and what it does not)
 
 This product is a free, donation-supported PWA. We are **not** authenticating humans; we are authenticating *clients* with an opaque principal id so that fair-use budgets, cost ceilings, and abuse controls attach to a **stable, app-issued identity** instead of to a bare IP. The audit is explicit that "IP-only throttling is weak identity and is readily shared, rotated, or bypassed." The anonymous-session principal is the missing layer between the edge IP limiter (defense-in-depth, kept) and the expensive/billable work.
