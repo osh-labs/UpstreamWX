@@ -199,6 +199,71 @@ class Settings(BaseSettings):
         default=None, validation_alias=AliasChoices("ANTHROPIC_API_KEY")
     )
 
+    # ── Public-release access gate: anonymous fair-use sessions (SA-01) ───────────────────
+    # Master switch, default ON. But the gate is only ACTIVE when a signing secret is also set
+    # (see session_secret) — this "secret-gated activation" is what lets on-by-default coexist
+    # with the secretless contexts (dev, CLI, the hermetic test suite, the tailnet beta): no
+    # secret → the gate stays inactive and /v1 runs open (with a startup WARNING), rather than
+    # crashing. The public host just sets UPSTREAMWX_SESSION_SECRET and the gate turns itself on.
+    # Set to 0 to force the gate off even where a secret exists (an operational kill-switch).
+    # When active, every expensive /v1/* endpoint requires a valid session token and
+    # per-principal + global cost budgets apply. The audit's point: IP-only throttling is "weak
+    # identity"; this attaches budgets to an app-issued principal. See api/auth.py, api/budget.py.
+    api_auth_enabled: bool = True
+
+    # Fail-closed guard for production (default OFF). When set, a missing/blank session_secret
+    # makes the app REFUSE to start instead of running open — so a public host that means to gate
+    # can never silently ship unauthenticated because someone forgot the secret. Left off for
+    # dev/CLI/tests/tailnet, which legitimately run open without a secret.
+    api_auth_required: bool = False
+
+    # HMAC signing secret for the stateless anonymous session tokens. Read as
+    # UPSTREAMWX_SESSION_SECRET (32+ random bytes: `openssl rand -hex 32`); lives in the runtime
+    # EnvironmentFile beside ANTHROPIC_API_KEY, never in git. Presence is what ACTIVATES the gate
+    # (see api_auth_enabled): with it set the gate enforces, without it /v1 runs open (unless
+    # api_auth_required forces a fail-closed startup). *_prev is verify-only, so the secret can be
+    # rotated with zero session loss.
+    session_secret: str | None = Field(
+        default=None, validation_alias=AliasChoices("UPSTREAMWX_SESSION_SECRET")
+    )
+    session_secret_prev: str | None = Field(
+        default=None, validation_alias=AliasChoices("UPSTREAMWX_SESSION_SECRET_PREV")
+    )
+    # Session lifetime (seconds). The PWA re-mints transparently on expiry, so a week keeps the
+    # cookie stable across a multi-day expedition without a long-lived credential.
+    session_ttl_s: int = 7 * 24 * 3600
+    # Set the Secure attribute on the session cookie (default on — production is HTTPS-only, a
+    # hard prerequisite, see SA-09). Set 0 only for local http/dev and the offline test client.
+    session_cookie_secure: bool = True
+    # Per-IP token-bucket budget for session MINTING (POST /v1/session). Minting is cheap for us
+    # but freely mintable anonymous tokens are the weak point of the model, so cap it hard per IP.
+    # Gated by api_rate_limits_enabled.
+    session_mint_rate_per_min: float = 5.0
+
+    # ── Per-principal fair-use budgets (only apply when api_auth_enabled) ─────────────────
+    # Charged only on WORK, never on cache hits: reopening the app or re-requesting the same
+    # mission is free. Per-IP token buckets (SA-02) remain the IP-aggregate layer beneath these,
+    # so token rotation from one source is still bounded. 0 disables a given budget.
+    budget_cold_per_principal_per_hour: int = 20  # cache-miss briefings (live ingest)
+    budget_frame_per_principal_per_day: int = 30  # billable Anthropic framing calls
+    budget_pdf_per_principal_per_hour: int = 20  # each launches headless Chromium
+    budget_warm_per_principal_per_hour: int = 60  # each is a 3-15 s USGS delineation
+    # Per-principal cap on scheduled-refresh registrations (SA-03): one client can no longer fill
+    # the shared active-mission registry. Over quota still briefs on demand, it just gets no
+    # recurring refresh (NFR-6). Well below api_active_missions_max (the global registry cap).
+    budget_active_per_principal: int = 3
+
+    # ── Global ceilings / circuit breakers (only apply when api_auth_enabled) ─────────────
+    # Absolute host- and cost-protection independent of any single principal. The frame ceiling
+    # is the model-spend cap: past it the API returns 503 + Retry-After and logs a WARNING (the
+    # alerting hook). 0 disables a given ceiling.
+    budget_global_cold_per_hour: int = 1200
+    budget_global_frame_per_day: int = 2000
+
+    # Expose FastAPI's interactive docs (/docs, /redoc, /openapi.json). Default OFF (SA-12):
+    # production should not publish its full request surface. Dev/staging can set it to 1.
+    docs_enabled: bool = False
+
     def ensure_data_dir(self) -> Path:
         """Create and return the data cache directory."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
