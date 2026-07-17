@@ -191,20 +191,26 @@ function hasStoredBriefing() {
   return !!_hasStored;
 }
 
-// True when the persisted briefing was generated for the same mission the app is
-// about to request — compared on the fields that change the product (point, window,
-// activity, slot, RoC). A mismatch is surfaced in the status, never silently shown.
-function storedSpecMatches(stored, spec) {
+// Compare a persisted briefing's mission against the one the app is about to request.
+// The *expedition* (its identity) is the point + activity + slot; the window and RoC are
+// refinements of that same trip. Keeping the two distinct matters because the boot
+// roll-forward (issue #122) advances a stale window without changing the expedition — a
+// pure window shift must NOT read as "a different expedition" (a false alarm that fired when
+// reopening after several days). A mismatch is surfaced in the status, never silently shown.
+// Returns { sameExpedition, sameWindow }.
+function storedSpecComparison(stored, spec) {
   const a = stored && stored.spec, b = spec;
-  if (!a || !b) return false;
+  if (!a || !b) return { sameExpedition: false, sameWindow: false };
   const near = (x, y) => Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-6;
   const roc = (s) => (Number.isFinite(s.radius_km) ? s.radius_km : ROC_DEFAULT_MI * MI_TO_KM);
-  return (
+  const sameExpedition =
     near(a.lat, b.lat) && near(a.lon, b.lon) &&
-    a.activity === b.activity && !!a.slot === !!b.slot &&
+    a.activity === b.activity && !!a.slot === !!b.slot;
+  const sameWindow =
+    sameExpedition &&
     String(a.start) === String(b.start) && String(a.end) === String(b.end) &&
-    near(roc(a), roc(b))
-  );
+    near(roc(a), roc(b));
+  return { sameExpedition, sameWindow };
 }
 
 // Human age of an ISO timestamp: "just now", "12 min ago", "3 h ago", "2 d ago".
@@ -226,10 +232,15 @@ function restoreStoredBriefing(spec) {
   const stored = loadStoredBriefing();
   if (!stored) return false;
   state.fromCache = true;
+  const cmp = storedSpecComparison(stored, spec);
   state.cachedRestore = {
     stored_at: stored.stored_at,
     name: (stored.briefing.mission && stored.briefing.mission.name) || stored.spec?.name || "expedition",
-    mismatch: !storedSpecMatches(stored, spec),
+    // A genuinely different trip (moved point / changed activity) vs. the same trip at a
+    // different window (e.g. the boot roll-forward) — worded distinctly so the latter no
+    // longer masquerades as "a different expedition".
+    mismatch: !cmp.sameExpedition,
+    windowMismatch: cmp.sameExpedition && !cmp.sameWindow,
   };
   try {
     renderAll(stored.briefing);
@@ -2272,7 +2283,9 @@ function renderStatus(b) {
     });
     const note = c.mismatch
       ? "Saved for a different expedition than your current plan."
-      : "Not live — retry when back online for a current briefing.";
+      : c.windowMismatch
+        ? "Saved for a different window than your current plan — retry when online."
+        : "Not live — retry when back online for a current briefing.";
     statusEl.innerHTML = `
       <span class="cached-badge">${icon("wifi_off", "")} <span>Cached<br>briefing</span></span>
       <span class="status-line__currency">Saved briefing from ${esc(when)} (${esc(fmtAge(c.stored_at))}) — “${esc(c.name)}”.<br>${esc(note)}</span>`;
