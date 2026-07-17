@@ -419,6 +419,24 @@ already delivered the per-principal registration cap (the "register only authori
 half). The 256 registry cap is now a memory ceiling, not the work bound (the TTL + pass budget are).
 Full offline suite green (480); does **not** fold in SA-05/06 or the deferred conditions-cache split.
 
+**Deploy reproducibility, TLS/host validation & log redaction (SA-06 + SA-09 + SA-13, 2026-07-17).**
+Pre-public-beta hardening of the deploy layer and edge (workplan `docs/sa-06-09-13-hardening-workplan.md`;
+changelog `docs/changelog-2026-07-17-sa-06-09-13.md`). The **in-repo, offline-verifiable** parts landed;
+the host-only parts (root-owned atomic release dirs, certbot TLS, SBOM) are specified and deferred to a
+host pass (workplan §5). Engine output unchanged (NFR-4). **SA-06:** a committed **`uv.lock`** (the
+reproducibility keystone) + `deploy.sh` now installs with **`uv sync --frozen --no-dev`** (exact, prod-only,
+fails on a stale lock) instead of re-resolving; the **root execution of `.venv/bin/playwright install-deps`
+was removed** (Chromium OS libs come from `bootstrap.sh`'s root-owned apt manifest, and a new
+`_usable_chromium_present` helper checks for a browser without running any venv binary), closing the "root
+executes service-user-writable code" trust-boundary crossing; the uv installer is pinned to an exact
+version. **SA-09:** new `api_trusted_hosts` installs `TrustedHostMiddleware` outermost (a bad `Host` → 400;
+default off so dev/tailnet/TestClient are unchanged, loopback always allowed so `/v1/health` keeps working),
+and a new `DEPLOY_REQUIRE_HTTPS` deploy gate fails a public deploy without live HTTPS + HTTP→HTTPS redirect
+— the SA-01 `Secure` cookie is inert without TLS. **SA-13:** the scheduler's healthcheck-ping failure log is
+redacted (`scheme://host/<redacted>` + exception type only, no `exc_info`) so the secret ping token can't
+reach the journal. New settings echoed on `/v1/health`; documented in the deploy env examples. Full offline
+suite green (486). PR A (SA-05 CDN/CSP) is handed off separately and also edits nginx — coordinate the overlap.
+
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
 (`BriefingResponse.markdown`) as formatted HTML using a zero-dependency in-browser converter

@@ -50,12 +50,15 @@ $RUN_USER tee "$DEPLOY_APP_DIR/frontend/version.json" >/dev/null <<EOF
 EOF
 ok "stamped release $RELEASE"
 
-# --- 2. Refresh the virtualenv + install the package (production deps only) -----------
-log "syncing virtualenv (uv)"
-[ -d "$DEPLOY_APP_DIR/.venv" ] || $RUN_USER uv venv --python 3.11 "$DEPLOY_APP_DIR/.venv"
-$RUN_USER env VIRTUAL_ENV="$DEPLOY_APP_DIR/.venv" \
-    uv pip install --python "$DEPLOY_APP_DIR/.venv/bin/python" -e "$DEPLOY_APP_DIR"
-ok "dependencies installed"
+# --- 2. Refresh the virtualenv from the committed lockfile (exact, frozen) ------------
+# SA-06: install the EXACT resolved set from the committed uv.lock rather than re-resolving
+# unbounded deps at deploy time, so two deploys of the same ref get the same packages and a
+# rollback restores the same environment. `--frozen` fails loudly if the lock is out of date
+# with pyproject (no silent re-resolve); `--no-dev` omits the pytest/ruff dev group. Runs as
+# the service user (never root) into the service-owned .venv.
+log "syncing virtualenv from uv.lock (uv sync --frozen --no-dev)"
+$RUN_USER uv sync --frozen --no-dev --python 3.11
+ok "dependencies installed (exact, from uv.lock)"
 
 # Fail fast if the GRIB stack can't import (the most likely host-specific breakage).
 if ! $RUN_USER "$DEPLOY_APP_DIR/.venv/bin/python" -c "import cfgrib" 2>/dev/null; then
@@ -84,18 +87,20 @@ $RUN_USER env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_DIR" \
 # looks when the env var is unset.
 $RUN_USER "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null \
     && ok "Playwright Chromium also ready at $DEPLOY_APP_DIR/.cache/ms-playwright" || true
-# Install OS-level shared library dependencies the headless shell requires (libatk, libglib,
-# libx11, etc.).  Must run as root so apt-get can install system packages.  Safe to re-run.
-if "$DEPLOY_APP_DIR/.venv/bin/playwright" install-deps chromium 2>/dev/null; then
-    ok "Playwright system deps installed"
-else
-    warn "playwright install-deps chromium failed (unsupported distro?) — falling back to Google Chrome"
-    # Ubuntu 22.04+ ships Chromium as a snap package only.  Snap processes need a user
-    # session (XDG_RUNTIME_DIR, snap home dir) that don't exist for a system service
-    # account, so the snap wrapper always fails in this context.  Google Chrome ships a
-    # proper apt package that works headlessly without any snap infrastructure.
-    if command -v apt-get >/dev/null 2>&1 \
-            && ! command -v google-chrome-stable >/dev/null 2>&1 \
+# Chromium's OS-level shared libraries (libatk, libnss3, libx11, …) are installed ONCE, as
+# root, from bootstrap.sh's reviewed static apt manifest — NOT by executing the service-user-
+# owned `.venv/bin/playwright install-deps` as root, which would cross the deploy trust
+# boundary (a compromised venv → root code execution, SA-06). If Playwright's own Chromium
+# won't run on this distro, fall back to Google Chrome from its signed apt repo; root running
+# apt is legitimate and never executes venv code. Best-effort throughout (NFR-6): a missing
+# browser only makes the PDF endpoint return 503, and an unnecessary fallback install is harmless.
+if _usable_chromium_present; then
+    ok "Chromium available for PDF export"
+elif command -v apt-get >/dev/null 2>&1; then
+    # Ubuntu 22.04+ ships Chromium as a snap only; a system service account has no snap session,
+    # so the snap wrapper fails headlessly. Google Chrome's apt package works without snap.
+    warn "no usable Playwright Chromium — installing Google Chrome from its signed apt repo"
+    if ! command -v google-chrome-stable >/dev/null 2>&1 \
             && ! command -v google-chrome >/dev/null 2>&1; then
         log "adding Google Chrome apt repository"
         curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
@@ -107,11 +112,11 @@ http://dl.google.com/linux/chrome/deb/ stable main" \
         DEBIAN_FRONTEND=noninteractive apt-get install -y -qq google-chrome-stable \
             || warn "google-chrome-stable install failed — PDF export endpoint will return 503"
     fi
-    if command -v google-chrome-stable >/dev/null 2>&1 || command -v google-chrome >/dev/null 2>&1; then
-        ok "Google Chrome available for PDF export"
-    else
-        warn "no usable Chromium found — PDF export endpoint will return 503"
-    fi
+    _usable_chromium_present \
+        && ok "Google Chrome available for PDF export" \
+        || warn "no usable Chromium found — PDF export endpoint will return 503"
+else
+    warn "no usable Chromium and no apt — PDF export endpoint will return 503"
 fi
 
 # --- 2b. Warm the REFS ensemble cache ------------------------------------------------
@@ -382,19 +387,44 @@ fi
 log "restarting $DEPLOY_SERVICE"
 systemctl restart "$DEPLOY_SERVICE"
 
-# --- 4. Health check -----------------------------------------------------------------
+# --- 4. Health check (loopback) ------------------------------------------------------
 log "waiting for /v1/health"
 url="http://${DEPLOY_BIND_HOST}:${DEPLOY_BIND_PORT}/v1/health"
+healthy=0
 for i in $(seq 1 20); do
     if curl -fsS "$url" >/dev/null 2>&1; then
         ok "healthy: $(curl -fsS "$url")"
-        log "deployed $REF @ $DEPLOYED_SHA"
-        exit 0
+        healthy=1
+        break
     fi
     sleep 1
 done
+if [ "$healthy" -ne 1 ]; then
+    warn "service did not become healthy in time — recent logs:"
+    # The API logs to a private journald namespace (LogNamespace=upstreamwx); read from it.
+    journalctl --namespace=upstreamwx -u "$DEPLOY_SERVICE" -n 40 --no-pager || true
+    die "deploy failed health check"
+fi
 
-warn "service did not become healthy in time — recent logs:"
-# The API logs to a private journald namespace (LogNamespace=upstreamwx); read from it.
-journalctl --namespace=upstreamwx -u "$DEPLOY_SERVICE" -n 40 --no-pager || true
-die "deploy failed health check"
+# --- 4b. Public TLS gate (SA-09) -----------------------------------------------------
+# The SA-01 session cookie is Secure, so the access gate is inert without live HTTPS. When
+# DEPLOY_REQUIRE_HTTPS=1 (set it on the PUBLIC prod config, AFTER certbot has issued the cert)
+# fail the deploy unless the public endpoint actually serves HTTPS and plain HTTP redirects to
+# it — so a public release can't silently ship without TLS. Off by default so bootstrap / first
+# deploy / tailnet (no DNS or cert yet) are unaffected.
+if [ "$DEPLOY_REQUIRE_HTTPS" = "1" ]; then
+    https_url="https://${DEPLOY_APP_SERVER_NAME}/v1/health"
+    log "verifying public HTTPS: $https_url"
+    curl -fsS --max-time 15 "$https_url" >/dev/null 2>&1 \
+        || die "HTTPS health check failed ($https_url) — is the certbot cert issued and nginx :443 live? (SA-09)"
+    ok "public HTTPS healthy"
+    http_code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
+        "http://${DEPLOY_APP_SERVER_NAME}/v1/health" 2>/dev/null || echo 000)"
+    case "$http_code" in
+        301|308) ok "HTTP -> HTTPS redirect in place ($http_code)" ;;
+        *) warn "HTTP did not redirect to HTTPS (got $http_code) — check the certbot :80 redirect block (SA-09)" ;;
+    esac
+fi
+
+log "deployed $REF @ $DEPLOYED_SHA"
+exit 0
