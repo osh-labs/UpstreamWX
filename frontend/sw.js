@@ -31,11 +31,17 @@ const SHELL_ASSETS = [
   "styles/app.css",
   "js/app.js",
   "js/icons.js",
+  // Vendored, exact-pinned map libraries served same-origin (SA-05). Precaching them
+  // keeps the map working offline and when third-party CDNs are blocked (acceptance #1).
+  "vendor/maplibre-gl-5.24.0.js",
+  "vendor/maplibre-gl-5.24.0.css",
+  "vendor/maplibre-contour-0.1.0.js",
   "icons/icon.svg",
   "icons/cave.png",
   "icons/canyon.png",
-  // PDF export template + its logo, so Export-to-PDF works offline (FR-27).
+  // PDF export template + its externalized logic + logo, so Export-to-PDF works offline (FR-27).
   "pdf/briefing-pdf.html",
+  "pdf/briefing-pdf.js",
   "pdf/logo-light.png",
   // Posture-label config the PDF (and app) read for approachable language.
   "data/display-config.json",
