@@ -92,6 +92,8 @@ def test_health(client):
         "refresh_pass_max_items",
         "refresh_pass_max_seconds",
         "refresh_gen_wait_s",
+        # SA-09 host validation
+        "trusted_hosts",
     }
     assert isinstance(limits["decode_pool"], bool)
     assert isinstance(limits["decode_cache_max_bytes"], int)
