@@ -3027,6 +3027,10 @@ function showWindowErrorCard(spec) {
     `type="button">Update mission</button></div></section>`;
   const btn = document.getElementById("window-error-update");
   if (btn) btn.addEventListener("click", () => openMissionPlanner(freshenStaleSpec(spec)));
+  // The card is a terminal "needs action" state, not a load in progress — clear the
+  // "Generating briefing…" status the loading skeleton left behind so it doesn't linger.
+  const statusEl = document.getElementById("status");
+  if (statusEl) statusEl.innerHTML = "";
 }
 
 async function main() {
