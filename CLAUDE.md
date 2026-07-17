@@ -419,6 +419,29 @@ already delivered the per-principal registration cap (the "register only authori
 half). The 256 registry cap is now a memory ceiling, not the work bound (the TTL + pass budget are).
 Full offline suite green (480); does **not** fold in SA-05/06 or the deferred conditions-cache split.
 
+**Supply-chain & browser-policy hardening: vendor the map libs + CSP (SA-05, 2026-07-17).** The last
+frontend High from the 2026-07-14 audit (workplan `docs/sa-05-vendor-map-libs-csp-workplan.md`; changelog
+`docs/changelog-2026-07-17-sa-05.md`). `frontend/index.html` loaded MapLibre GL (JS+CSS) and
+maplibre-contour from jsDelivr — two at a **floating `@5`** major, none with SRI — so a compromised CDN
+path or mutable major-version resolution could execute attacker code **in the app origin** (read
+`localStorage` mission/briefing data, hit billable `/v1/*`, alter the displayed posture). Fix: the libs are
+**vendored exact-pinned and served same-origin** (`frontend/vendor/maplibre-gl-5.24.0.{js,css}`,
+`maplibre-contour-0.1.0.js`; `crossorigin` dropped) — same-origin + `script-src 'self'` removes the
+third-party host from the trust path entirely (strictly stronger than CDN+SRI, and works with CDNs blocked)
+— and precached in `sw.js` so offline/CDN-blocked still renders. nginx now sends an **enforcing CSP**
+(`deploy/nginx/upstreamwx.conf` app + `landing.conf` apex): strict **`script-src 'self'`** (no CDN, no
+`unsafe-inline`, no `unsafe-eval`), the map's data planes narrowly enumerated (`connect-src`/`img-src`:
+`tiles.openfreemap.org`, `server.arcgisonline.com`, `s3.amazonaws.com`; Nominatim geocoder in
+`connect-src`), `worker-src 'self' blob:` for MapLibre's blob worker, and the one documented compromise
+`style-src 'self' 'unsafe-inline'` (MapLibre runtime styles + dynamic inline meter widths; `script-src`
+stays strict). The landing page is JS-free/self-contained → maximally strict `script-src 'none'`. The PDF
+template's ~400-line inline `<script>` is externalized to `frontend/pdf/briefing-pdf.js` (added to the
+`sitrep/pdf.py` server-render file-URI allow-list) so the served `?print=1` fallback also satisfies
+`script-src 'self'`. Both CSP `add_header` lines flag the shared-block overlap with PR B (SA-06/09 TLS).
+Verified with three headless-Chromium smoke passes (PWA+map, forced map+blob worker, served PDF template) —
+**0 CSP violations** each; server-side PDF render intact; suite **481 passed**, ruff clean. Engine output
+unchanged (NFR-4).
+
 **Deploy reproducibility, TLS/host validation & log redaction (SA-06 + SA-09 + SA-13, 2026-07-17).**
 Pre-public-beta hardening of the deploy layer and edge (workplan `docs/sa-06-09-13-hardening-workplan.md`;
 changelog `docs/changelog-2026-07-17-sa-06-09-13.md`). The **in-repo, offline-verifiable** parts landed;

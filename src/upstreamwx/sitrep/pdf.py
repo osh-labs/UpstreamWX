@@ -91,13 +91,19 @@ def _allowed_request_paths(template_path: Path) -> frozenset[Path]:
     """The only file-URI resources the rendered page may load.
 
     The page needs no network at all: the briefing and display config are injected as
-    init scripts before any page script runs. The single subresource the template
-    references is its masthead logo, which lives next to it. Everything else — other
-    ``file://`` paths, http(s), anything a hostile briefing payload might try to pull
-    into the render — is aborted (see :func:`render_pdf`).
+    init scripts before any page script runs. The subresources the template references
+    are its externalized logic script (``briefing-pdf.js``, split out of an inline
+    ``<script>`` so the served ``?print=1`` fallback satisfies a strict ``script-src
+    'self'`` CSP — SA-05) and its masthead logo, both siblings of the template.
+    Everything else — other ``file://`` paths, http(s), anything a hostile briefing
+    payload might try to pull into the render — is aborted (see :func:`render_pdf`).
     """
     return frozenset(
-        {template_path.resolve(), (template_path.parent / "logo-light.png").resolve()}
+        {
+            template_path.resolve(),
+            (template_path.parent / "briefing-pdf.js").resolve(),
+            (template_path.parent / "logo-light.png").resolve(),
+        }
     )
 
 
