@@ -87,9 +87,25 @@ def test_health(client):
         "briefing_miss_rate_per_min",
         # SA-01 access gate
         "auth_active",
+        # SA-03 scheduled-refresh bounds
+        "active_refresh_ttl_s",
+        "refresh_pass_max_items",
+        "refresh_pass_max_seconds",
+        "refresh_gen_wait_s",
     }
     assert isinstance(limits["decode_pool"], bool)
     assert isinstance(limits["decode_cache_max_bytes"], int)
+    # Last-pass refresh metrics (SA-03 rec 7): counts only, present even before the first pass.
+    assert set(body["refresh"]) == {
+        "regenerated",
+        "registry_size",
+        "pruned_ended",
+        "pruned_stale",
+        "deferred",
+        "skipped_budget",
+        "failed",
+        "duration_s",
+    }
 
 
 def test_briefing_offline_inputs(client):

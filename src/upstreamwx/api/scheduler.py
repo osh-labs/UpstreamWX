@@ -80,7 +80,22 @@ async def run_scheduler(service: BriefingService, *, stop: asyncio.Event | None 
             logger.exception("scheduled ensemble warm failed")
         try:
             count = await asyncio.to_thread(service.refresh_active)
-            logger.info("scheduled refresh regenerated %d briefing(s)", count)
+            # Structured per-pass metrics (SA-03 rec 7): registry size, work done, work pruned as
+            # ended/stale, and work skipped by the item/time budget or deferred to interactive
+            # load. Makes a stuck or budget-bound scheduler visible in the journal.
+            s = service.last_refresh_stats
+            logger.info(
+                "scheduled refresh: regenerated=%d registry=%d pruned_ended=%d pruned_stale=%d "
+                "deferred=%d skipped_budget=%d failed=%d duration=%.2fs",
+                count,
+                s.registry_size,
+                s.pruned_ended,
+                s.pruned_stale,
+                s.deferred,
+                s.skipped_budget,
+                s.failed,
+                s.duration_s,
+            )
         except Exception:  # noqa: BLE001 — one bad cycle must not kill the scheduler
             cycle_ok = False
             logger.exception("scheduled refresh failed")

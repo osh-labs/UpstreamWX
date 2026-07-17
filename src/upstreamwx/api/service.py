@@ -75,6 +75,27 @@ class _Registered:
     frame: bool | None
     key: str
     pid: str | None = None  # owning principal (SA-01/SA-03), None when the gate is off
+    last_seen: datetime | None = None  # last time it was VIEWED (SA-03 recently-viewed gate)
+
+
+@dataclass(frozen=True)
+class RefreshStats:
+    """Outcome of one scheduled refresh pass, for logging and /v1/health (SA-03 rec 7).
+
+    Counts only (no mission content), so it is safe to surface on the unauthenticated health
+    probe (SA-12). ``deferred`` is work yielded to interactive briefings on generation-slot
+    contention; ``skipped_budget`` is work left for the next pass by the item/wall-clock cap —
+    both are refreshed next cycle or on demand (NFR-6), never dropped.
+    """
+
+    registry_size: int = 0
+    regenerated: int = 0
+    pruned_ended: int = 0
+    pruned_stale: int = 0
+    deferred: int = 0
+    skipped_budget: int = 0
+    failed: int = 0
+    duration_s: float = 0.0
 
 
 class BriefingService:
@@ -98,8 +119,14 @@ class BriefingService:
         self._gen_sem = threading.BoundedSemaphore(n) if n and n > 0 else None
         # Refresh registry, bounded (H-8): refresh_active re-ingests every entry each cycle,
         # so its cost scales linearly with this dict — which previously grew without bound.
+        # Mutated from BOTH request worker threads (_register_active / _touch_active) and the
+        # scheduler thread (refresh_active), so every access is guarded by _active_lock (SA-03):
+        # the previous lock-free access could raise or refresh inconsistently under concurrency.
         self._active: dict[str, _Registered] = {}
+        self._active_lock = threading.Lock()
         self._active_max = max(1, settings.api_active_missions_max)
+        # Last scheduled-refresh pass outcome, for logging + /v1/health (SA-03 rec 7).
+        self._last_refresh_stats = RefreshStats()
         self._warm_pending_max = max(1, settings.api_warm_pending_max)
         # Stores the engine BriefingResult alongside its cache key so the streaming
         # framing endpoint can call Haiku without re-running ingest. LRU-bounded like the
@@ -187,6 +214,9 @@ class BriefingService:
 
         cached = self.cache.get(key, token)
         if cached is not None:
+            # A hit means the user reopened this mission — keep it eligible for scheduled
+            # refresh (SA-03 recently-viewed gate) without charging any cost.
+            self._touch_active(key, now)
             return self._response(cached, token, cached=True)
 
         # Confirmed cache miss -> cold generation. Charge the caller's cost budget first (SA-02):
@@ -207,6 +237,7 @@ class BriefingService:
             # A request for the same mission may have generated it while we waited for a slot.
             cached = self.cache.get(key, token)
             if cached is not None:
+                self._touch_active(key, now)
                 return self._response(cached, token, cached=True)
 
             # Haiku framing is always deferred to the streaming /v1/briefing/frame endpoint
@@ -218,14 +249,19 @@ class BriefingService:
             # Track live, still-in-range missions for the scheduler (FR-12). Deterministic
             # offline briefings need no refresh, so they are not registered.
             if inputs is None and now < _as_utc(mission.window_end):
-                self._register_active(key, mission, principal_pid=principal_pid)
+                self._register_active(key, mission, now=now, principal_pid=principal_pid)
             return self._response(briefing, token, cached=False)
         finally:
             if self._gen_sem is not None:
                 self._gen_sem.release()
 
     def _register_active(
-        self, key: str, mission: Mission, *, principal_pid: str | None = None
+        self,
+        key: str,
+        mission: Mission,
+        *,
+        now: datetime,
+        principal_pid: str | None = None,
     ) -> None:
         """Register a live mission for scheduled refresh, capped (FR-12, H-8, SA-01/SA-03).
 
@@ -239,24 +275,41 @@ class BriefingService:
         ``budget_active_per_principal`` in-range registrations gets no new one — one client can
         no longer convert single requests into unbounded recurring background work. The briefing
         itself is unaffected (it was already generated); it just isn't scheduled for refresh.
+        ``last_seen`` is stamped with ``now`` so the recently-viewed gate (:meth:`refresh_active`)
+        starts its clock at first request. Runs under ``_active_lock`` (SA-03) — the registry is
+        also mutated from the scheduler thread.
         """
         settings = get_settings()
-        if (
-            auth_active(settings)
-            and principal_pid is not None
-            and key not in self._active
-        ):
-            owned = sum(1 for reg in self._active.values() if reg.pid == principal_pid)
-            if owned >= settings.budget_active_per_principal:
-                return  # over per-principal quota — do not create recurring refresh work
-        if key not in self._active and len(self._active) >= self._active_max:
-            soonest = min(
-                self._active, key=lambda k: _as_utc(self._active[k].mission.window_end)
+        with self._active_lock:
+            if (
+                auth_active(settings)
+                and principal_pid is not None
+                and key not in self._active
+            ):
+                owned = sum(1 for reg in self._active.values() if reg.pid == principal_pid)
+                if owned >= settings.budget_active_per_principal:
+                    return  # over per-principal quota — do not create recurring refresh work
+            if key not in self._active and len(self._active) >= self._active_max:
+                soonest = min(
+                    self._active, key=lambda k: _as_utc(self._active[k].mission.window_end)
+                )
+                del self._active[soonest]
+            self._active[key] = _Registered(
+                mission=mission, frame=False, key=key, pid=principal_pid, last_seen=now
             )
-            del self._active[soonest]
-        self._active[key] = _Registered(
-            mission=mission, frame=False, key=key, pid=principal_pid
-        )
+
+    def _touch_active(self, key: str, now: datetime) -> None:
+        """Bump a registered mission's ``last_seen`` because it was just viewed (SA-03).
+
+        A cache hit means the user reopened the app for this mission, so it stays eligible for
+        scheduled refresh; a mission never re-viewed goes stale and is pruned by
+        :meth:`refresh_active`. No-op if the key is not registered (e.g. an ``inputs`` replay,
+        or a registration skipped by the per-principal quota). O(1) under ``_active_lock``.
+        """
+        with self._active_lock:
+            reg = self._active.get(key)
+            if reg is not None:
+                reg.last_seen = now
 
     def get_result(self, key: str) -> BriefingResult | None:
         """Return the cached engine result for ``key``, or None on miss.
@@ -296,27 +349,113 @@ class BriefingService:
         return warmed
 
     def refresh_active(self, *, now: datetime | None = None) -> int:
-        """Regenerate every in-range active mission into the current cycle (FR-12).
+        """Regenerate in-range, recently-viewed active missions into the current cycle (FR-12).
 
-        Drops missions whose window has ended. Returns the number regenerated. This is
-        the unit the always-on scheduler calls each cycle (see ``scheduler.py``).
+        Hardened per SA-03 so one pass can never run unbounded, multi-day, or interactive-
+        starving work:
+
+        - **Prune** (under ``_active_lock``): drop missions whose window has ended, and missions
+          not *viewed* within ``api_active_refresh_ttl_s`` — a fire-and-forget request stops
+          refreshing after the TTL (a refresh regeneration is not a view), so it becomes at most
+          ~2 cycles of work, not days. A reopened (actively planned) mission stays warm.
+        - **Budget**: stop cleanly at ``api_refresh_pass_max_items`` regenerations or
+          ``api_refresh_pass_max_seconds`` wall-clock; the remainder refreshes next cycle or on
+          demand (NFR-6).
+        - **Yield**: each regeneration shares the request path's ``_gen_sem`` (so scheduled +
+          interactive gens never exceed the concurrency cap) but waits only
+          ``api_refresh_gen_wait_s`` for a slot; if the host is busy serving real users the pass
+          defers the rest — refresh uses spare capacity only, never starving an interactive
+          briefing.
+
+        Returns the number regenerated (kept an ``int`` for callers); the full per-pass counts are
+        on :attr:`last_refresh_stats`. Runs on the scheduler thread via ``asyncio.to_thread``.
         """
         now = now or datetime.now(UTC)
+        settings = get_settings()
         token = self._cycle_token(now)
-        regenerated = 0
-        for key, reg in list(self._active.items()):
-            if now >= _as_utc(reg.mission.window_end):
-                del self._active[key]  # mission is over; stop refreshing it
-                continue
-            briefing = generate_briefing(reg.mission, frame=False, generated_at=now)
-            self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
-            self.cache.put(key, briefing, token)
-            regenerated += 1
+        ttl_s = settings.api_active_refresh_ttl_s  # <= 0 disables the recently-viewed gate
+        stale_before = now - timedelta(seconds=ttl_s) if ttl_s and ttl_s > 0 else None
+        max_items = settings.api_refresh_pass_max_items
+        max_seconds = settings.api_refresh_pass_max_seconds
+        gen_wait = settings.api_refresh_gen_wait_s
+        start = time.monotonic()
+        deadline = start + max_seconds if max_seconds and max_seconds > 0 else None
+
+        # Prune ended/stale and snapshot the survivors under the lock; do the slow generation
+        # OUTSIDE it so a long pass never blocks request-thread registration (SA-03).
+        pruned_ended = pruned_stale = 0
+        with self._active_lock:
+            for key in list(self._active):
+                reg = self._active[key]
+                if now >= _as_utc(reg.mission.window_end):
+                    del self._active[key]  # mission is over; stop refreshing it
+                    pruned_ended += 1
+                elif (
+                    stale_before is not None
+                    and reg.last_seen is not None
+                    and reg.last_seen < stale_before
+                ):
+                    del self._active[key]  # not viewed within the TTL; stop refreshing it
+                    pruned_stale += 1
+            registry_size = len(self._active)
+            # Soonest-ending first: imminent trips are the most likely to be acted on, so they
+            # win the budget if the pass can't reach everyone.
+            snapshot = sorted(
+                ((k, reg.mission) for k, reg in self._active.items()),
+                key=lambda km: _as_utc(km[1].window_end),
+            )
+
+        regenerated = deferred = skipped_budget = failed = 0
+        for i, (key, mission) in enumerate(snapshot):
+            remaining = len(snapshot) - i
+            # Budget counts attempts (successes + failures), so a high-failure pass still stops
+            # at the item cap rather than churning the whole registry.
+            if (max_items and regenerated + failed >= max_items) or (
+                deadline is not None and time.monotonic() >= deadline
+            ):
+                skipped_budget = remaining  # left for the next pass / on demand (NFR-6)
+                break
+            # Share the request concurrency cap and yield to interactive work: if no slot frees
+            # promptly the host is busy with real briefings, so defer the rest of the pass.
+            if self._gen_sem is not None and not self._gen_sem.acquire(timeout=gen_wait):
+                deferred = remaining
+                break
+            try:
+                briefing = generate_briefing(mission, frame=False, generated_at=now)
+                self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
+                self.cache.put(key, briefing, token)
+            except Exception:  # noqa: BLE001 — one bad mission must not sink the whole pass (NFR-6)
+                failed += 1
+                logger.exception("scheduled refresh failed for mission %s", key)
+            else:
+                regenerated += 1
+            finally:
+                if self._gen_sem is not None:
+                    self._gen_sem.release()
+
+        # Always record the pass outcome (even after per-mission failures) so /v1/health and the
+        # journal reflect the latest pass, not a stale one (SA-03 rec 7).
+        self._last_refresh_stats = RefreshStats(
+            registry_size=registry_size,
+            regenerated=regenerated,
+            pruned_ended=pruned_ended,
+            pruned_stale=pruned_stale,
+            deferred=deferred,
+            skipped_budget=skipped_budget,
+            failed=failed,
+            duration_s=round(time.monotonic() - start, 3),
+        )
         return regenerated
 
     @property
     def active_count(self) -> int:
-        return len(self._active)
+        with self._active_lock:
+            return len(self._active)
+
+    @property
+    def last_refresh_stats(self) -> RefreshStats:
+        """Counts from the most recent :meth:`refresh_active` pass (SA-03 rec 7)."""
+        return self._last_refresh_stats
 
     # -- watershed warming ----------------------------------------------------------
     def start_warming(self, *, max_workers: int = 2) -> None:

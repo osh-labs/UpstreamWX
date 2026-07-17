@@ -107,13 +107,24 @@ class BoundedLRU(Generic[_V]):
 
 
 def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> str:
-    """Stable key identifying a mission's briefing (location + window + activity).
+    """Stable key identifying a mission's briefing (location + window + activity + metadata).
 
     Coordinates are rounded to ~11 m so a reopened pin at the same spot hits. When an
     explicit feature vector is supplied it is folded in, so two different saved inputs at
     one location/window do not collide. The Radius of Concern and Lightning Area of Concern
     radii are folded in too: both change the aggregation domain (and therefore the postures),
     so two requests differing only by a radius must not collide on one cache entry.
+
+    The user-supplied mission metadata (``name``/``party_size``/``route_note``) is part of the
+    key too (SA-04). The cached value embeds the request's ``Mission`` and the rendered briefing
+    prints ``mission.name`` (render.py, structured.py), so omitting these fields let two
+    differently-labelled missions at the same conditions collide — the second requester was
+    served the first's mission name and presentation (a cross-user disclosure and a
+    cache-poisoning vector). They are folded in as a single ``repr`` of the tuple so distinct
+    metadata always yields a distinct key (a raw ``|``-join of attacker-chosen strings could
+    otherwise be gamed into a collision). ``name`` is the only field rendered today;
+    ``party_size``/``route_note`` are included defensively so a future change that surfaces them
+    cannot reintroduce the leak.
     """
     parts = [
         mission.activity_type.value,
@@ -126,6 +137,7 @@ def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> s
         "slot" if mission.is_slot else "open",
         f"roc={mission.radius_km}",
         f"laoc={mission.lightning_radius_km}",
+        f"meta={(mission.name, mission.party_size, mission.route_note)!r}",
     ]
     if inputs is not None:
         parts.append(repr(sorted(vars(inputs).items())))

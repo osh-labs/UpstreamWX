@@ -392,6 +392,33 @@ deployment; the shared-store version is the same M0.1.1 upgrade the cache docume
 proof-of-work mint hardening (GA) and the `/v1/health` field trim. Does **not** fix SA-04 or SA-02
 (separate). Engine output unchanged (NFR-4).
 
+**Recurring-workload & cache-isolation hardening (SA-03 + SA-04, 2026-07-15).** The last two High
+findings targeted from the 2026-07-14 audit (workplan `docs/sa-03-04-hardening-workplan.md`;
+changelog `docs/changelog-2026-07-15-sa-03-04.md`). Both are **backend-only** and hold for an
+unauthenticated client; **engine output is unchanged (NFR-4)** — SA-04 changes a cache *key*, SA-03
+changes only *when/whether* a briefing regenerates. **SA-04:** the response cache key
+(`api/cache.py` `mission_cache_key`) previously omitted `name`/`party_size`/`route_note` while the
+cached briefing embeds the request's `Mission` and renders `mission.name`, so two users at the same
+place/window/activity/radii collided on one entry and the second was served the **first's mission
+name and presentation** (cross-user disclosure + cache poisoning). The key now folds them in as a
+collision-safe `repr((name, party_size, route_note))` — the audit's immediate fix (the stronger
+conditions/presentation split is deferred, workplan §6; SA-02 already bounds these fields so the lost
+cache-sharing is negligible). **SA-03:** `refresh_active` (`api/service.py`) re-ingested every
+registered in-range mission every cycle until its window ended, and `_active` was mutated from
+request + scheduler threads with no lock — so one request (window ≤10 days out, ≤7-day span) pinned
+~2 weeks of recurring work. Now the registry is **lock-guarded** (generation runs outside the lock);
+refresh is limited to **recently-viewed** missions (a `last_seen` bumped by every briefing hit/miss
+but *not* by a refresh — `api_active_refresh_ttl_s`, default 12 h ≈ two cycles — so a fire-and-forget
+request stops refreshing after the TTL, not after days); each pass has a **hard item + wall-clock
+budget** (`api_refresh_pass_max_items`/`_seconds`) and **shares the request `_gen_sem`**, yielding to
+interactive briefings on slot contention (`api_refresh_gen_wait_s`) so scheduled work never starves a
+real request; each regeneration is per-mission try/excepted so one bad mission can't sink the pass
+(NFR-6); and a per-pass `RefreshStats` (incl. a `failed` count) is logged and echoed on `/v1/health`
+(rec 7). SA-01
+already delivered the per-principal registration cap (the "register only authorized principals"
+half). The 256 registry cap is now a memory ceiling, not the work bound (the TTL + pass budget are).
+Full offline suite green (480); does **not** fold in SA-05/06 or the deferred conditions-cache split.
+
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
 (`BriefingResponse.markdown`) as formatted HTML using a zero-dependency in-browser converter

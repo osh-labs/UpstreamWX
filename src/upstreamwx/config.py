@@ -130,7 +130,38 @@ class Settings(BaseSettings):
     # grew without bound (entries only dropped when their window ended). At the cap the service
     # evicts the mission whose window ends soonest; an evicted mission still briefs on demand,
     # it just loses scheduled refresh (NFR-6). 256 in-range missions is generous for one host.
+    # NOTE (SA-03): with the recently-viewed TTL and per-pass budget below, this is now a MEMORY
+    # ceiling on the registry dict, not the refresh WORK bound — the work is bounded by those two
+    # controls regardless of registry size. Lower it if a host wants a tighter registry.
     api_active_missions_max: int = 256
+
+    # How long since it was last VIEWED a mission stays eligible for scheduled refresh (SA-03).
+    # Every successful /v1/briefing (cache hit OR miss) bumps the mission's last-seen; a refresh
+    # regeneration does NOT (else refresh would keep itself alive forever). So a fire-and-forget
+    # request stops being refreshed after this window — one anonymous request becomes at most
+    # ~2 cycles of recurring work, not the up-to-17-days a 10-day-out, 7-day window allowed. A
+    # reopened (actively planned) mission stays warm. Default 12 h ≈ two 6-hourly cycles; a
+    # pruned mission still briefs on demand (NFR-6). 0 disables the gate (refresh until window end).
+    # Keep this >= the cache-cycle length (~6 h): below it, a mission could go stale-and-pruned
+    # while its cache entry is still valid, so a re-view (a cache hit) would not re-register it for
+    # refresh — it would only re-register on the next cold miss. Fails toward on-demand (NFR-6).
+    api_active_refresh_ttl_s: float = 12 * 3600.0
+
+    # Hard per-pass caps for the scheduled refresh (SA-03) so one pass can never run unbounded
+    # work or starve interactive briefings. The pass stops cleanly at this many regenerations
+    # (0 = unlimited) or this many wall-clock seconds (0 = unlimited), whichever comes first;
+    # missions not reached simply refresh next cycle or on demand (NFR-6). Defaults suit a small
+    # host: 64 items well above a healthy recently-viewed registry, 240 s a generous ceiling
+    # given warm GEFS/REFS + watershed caches make each regeneration a few seconds.
+    api_refresh_pass_max_items: int = 64
+    api_refresh_pass_max_seconds: float = 240.0
+
+    # How long a refresh regeneration waits for a shared generation slot (briefing_max_concurrency)
+    # before yielding the rest of the pass to interactive briefings (SA-03). Scheduled and request
+    # generations share _gen_sem so they never jointly exceed the concurrency cap; a short wait
+    # means refresh only uses spare capacity — if real users hold the slots, the pass defers rather
+    # than competing. Deferred missions refresh next cycle (NFR-6).
+    api_refresh_gen_wait_s: float = 0.5
 
     # Cap the watershed warm queue (H-8): each pending warm is a 3-15 s USGS delineation, and the
     # pending set previously grew (and queued executor work) without bound. At the cap the service

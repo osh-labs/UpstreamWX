@@ -496,6 +496,10 @@ def health() -> dict:
     just the configured flag.
     """
     settings = get_settings()
+    # Last scheduled-refresh pass counts (SA-03 rec 7) — counts only, no mission content, so this
+    # is safe on the unauthenticated probe (SA-12). Makes a stuck / budget-bound / deferring
+    # scheduler visible from a curl instead of only in the journal.
+    stats = service.last_refresh_stats
     return {
         "status": "ok",
         "release": _release(),
@@ -503,6 +507,16 @@ def health() -> dict:
         "next_cycle": next_cycle().isoformat(),
         "cached_briefings": len(service.cache),
         "active_missions": service.active_count,
+        "refresh": {
+            "regenerated": stats.regenerated,
+            "registry_size": stats.registry_size,
+            "pruned_ended": stats.pruned_ended,
+            "pruned_stale": stats.pruned_stale,
+            "deferred": stats.deferred,
+            "skipped_budget": stats.skipped_budget,
+            "failed": stats.failed,
+            "duration_s": stats.duration_s,
+        },
         "limits": {
             "decode_pool": grib_cache.decode_pool_enabled(),
             "decode_pool_workers": settings.decode_pool_workers,
@@ -521,6 +535,11 @@ def health() -> dict:
             "max_request_bytes": settings.api_max_request_bytes,
             "allow_inputs_replay": settings.api_allow_inputs_replay,
             "briefing_miss_rate_per_min": settings.api_briefing_miss_rate_per_min,
+            # SA-03 scheduled-refresh bounds
+            "active_refresh_ttl_s": settings.api_active_refresh_ttl_s,
+            "refresh_pass_max_items": settings.api_refresh_pass_max_items,
+            "refresh_pass_max_seconds": settings.api_refresh_pass_max_seconds,
+            "refresh_gen_wait_s": settings.api_refresh_gen_wait_s,
         },
     }
 
