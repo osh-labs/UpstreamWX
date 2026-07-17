@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from urllib.parse import urlsplit
 
 from ..config import get_settings
 from .cycles import seconds_until_next_cycle
@@ -26,6 +27,23 @@ logger = logging.getLogger("upstreamwx.api.scheduler")
 # How long to wait on a monitoring ping before giving up. Monitoring must never slow or
 # block the scheduler, so this is short and all failures are swallowed.
 _PING_TIMEOUT = 10
+
+
+def _redact_ping_url(url: str) -> str:
+    """Redact a healthcheck ping URL for logging (SA-13).
+
+    Healthchecks.io-style URLs carry a bearer secret in the PATH (``…/<uuid>``), so a raw log
+    of the target — or of a ``requests`` exception, which embeds the full URL in its message —
+    would place that credential in the private journal. Return only ``scheme://host`` with the
+    path elided: enough to identify the provider, never the token.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "<redacted>"
+    if not parts.scheme or not parts.hostname:
+        return "<redacted>"
+    return f"{parts.scheme}://{parts.hostname}/<redacted>"
 
 
 async def _ping(url: str | None, suffix: str = "") -> None:
@@ -42,8 +60,12 @@ async def _ping(url: str | None, suffix: str = "") -> None:
         import requests
 
         await asyncio.to_thread(requests.get, target, timeout=_PING_TIMEOUT)
-    except Exception:  # noqa: BLE001 — monitoring must never affect the scheduler
-        logger.debug("healthcheck ping failed: %s", target, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 — monitoring must never affect the scheduler
+        # Log the redacted URL + exception TYPE only. Not ``exc_info``/``%s % exc``: a requests
+        # error stringifies with the full URL (secret path), which is exactly SA-13's leak.
+        logger.debug(
+            "healthcheck ping failed: %s (%s)", _redact_ping_url(target), type(exc).__name__
+        )
 
 
 async def run_scheduler(service: BriefingService, *, stop: asyncio.Event | None = None) -> None:

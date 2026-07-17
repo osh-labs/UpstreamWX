@@ -54,6 +54,12 @@ load_config() {
     : "${DEPLOY_LANDING_SERVER_NAME:=}"
     : "${DEPLOY_LANDING_ROOT:=${DEPLOY_APP_DIR}/landing}"
     : "${DEPLOY_SERVICE:=upstreamwx-api}"
+    # SA-09: when "1", deploy.sh verifies the PUBLIC endpoint serves HTTPS (valid cert) and that
+    # plain HTTP redirects to it, failing the deploy otherwise. Off by default so bootstrap /
+    # first deploy / tailnet staging (no DNS or cert yet) are unaffected; the public prod config
+    # turns it on after certbot has issued the cert. The SA-01 Secure session cookie is inert
+    # without live HTTPS, so a public release must not ship without it.
+    : "${DEPLOY_REQUIRE_HTTPS:=0}"
 }
 
 # render_template SRC DEST — substitute the __TOKEN__ placeholders into DEST.
@@ -75,4 +81,24 @@ render_template() {
 
 require_root() {
     [ "$(id -u)" -eq 0 ] || die "must run as root (use sudo)"
+}
+
+# Whether a usable Chromium/Chrome for headless PDF export (FR-27) is present, checked WITHOUT
+# executing any service-user-owned venv binary as root (SA-06). Mirrors the locations
+# sitrep/pdf.py::_chromium_path searches: a Google Chrome / system Chromium on PATH, or a
+# Playwright-managed Chromium under either browser dir. Relies on PLAYWRIGHT_BROWSERS_DIR and
+# DEPLOY_APP_DIR being set by the caller (deploy.sh sets both before calling this).
+_usable_chromium_present() {
+    command -v google-chrome-stable >/dev/null 2>&1 && return 0
+    command -v google-chrome        >/dev/null 2>&1 && return 0
+    command -v chromium             >/dev/null 2>&1 && return 0
+    command -v chromium-browser     >/dev/null 2>&1 && return 0
+    local dir
+    for dir in "${PLAYWRIGHT_BROWSERS_DIR:-}" "${DEPLOY_APP_DIR:-}/.cache/ms-playwright"; do
+        [ -n "$dir" ] || continue
+        compgen -G "$dir/chromium*/chrome-linux/chrome" >/dev/null 2>&1 && return 0
+        compgen -G "$dir/chromium_headless_shell*/chrome-headless-shell-linux64/chrome-headless-shell" \
+            >/dev/null 2>&1 && return 0
+    done
+    return 1
 }

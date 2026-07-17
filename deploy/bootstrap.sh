@@ -85,9 +85,15 @@ EOF
 configure_auto_updates
 
 # --- 2. uv (Python toolchain, matches the repo) --------------------------------------
+# SA-06: pin the uv installer to an EXACT version (astral's versioned installer URL) rather than
+# piping the always-latest `astral.sh/uv/install.sh` into a root shell — so a deploy can't silently
+# pick up a changed installer, and the toolchain that builds the environment is itself reproducible.
+# Override UV_VERSION to bump. (A published-checksum verification of the installer is a further
+# hardening follow-up; pinning the version is the load-bearing change.)
+UV_VERSION="${UV_VERSION:-0.8.17}"
 if ! command -v uv >/dev/null 2>&1; then
-    log "installing uv"
-    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh
+    log "installing uv $UV_VERSION"
+    curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_INSTALL_DIR=/usr/local/bin sh
 fi
 command -v uv >/dev/null 2>&1 || die "uv install failed; install it manually and re-run"
 ok "uv: $(uv --version)"

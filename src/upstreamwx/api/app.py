@@ -364,6 +364,21 @@ class _SessionMiddleware:
         return await self.app(scope, receive, send)
 
 
+def _trusted_host_allowlist(settings) -> list[str] | None:
+    """Allowed ``Host`` values for TrustedHostMiddleware, or None to leave it off (SA-09).
+
+    None (the default, ``api_trusted_hosts`` unset) → no host restriction, so dev, CLI, the
+    tailnet beta, and the offline TestClient (Host ``testserver``) are unaffected. When a public
+    host configures the names, the loopback names are always appended so the direct ``/v1/health``
+    probe (deploy.sh, monitoring) and a local uvicorn keep working while an arbitrary public Host
+    is rejected. Starlette strips the port before matching, so the bind port needs no entry.
+    """
+    hosts = settings.api_trusted_hosts
+    if not hosts:
+        return None
+    return list(dict.fromkeys([*hosts, "127.0.0.1", "localhost", "::1"]))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Start the cycle-aligned refresh scheduler for the app's lifetime (FR-12)."""
@@ -453,6 +468,14 @@ app = FastAPI(
 app.add_middleware(_MaxBodySizeMiddleware, max_bytes=get_settings().api_max_request_bytes)
 # Deny unauthenticated requests to gated /v1 endpoints when the access gate is on (SA-01).
 app.add_middleware(_SessionMiddleware)
+# Reject requests with an unexpected Host header when a public host configures it (SA-09).
+# Added last → outermost, so a bad Host is 400'd before the session/body middleware runs. Off by
+# default (api_trusted_hosts unset) so dev/CLI/tailnet/TestClient are unaffected.
+_allowed_hosts = _trusted_host_allowlist(get_settings())
+if _allowed_hosts is not None:
+    from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
 
 def _json_safe(obj: object) -> object:
@@ -530,6 +553,9 @@ def health() -> dict:
             # Whether the access gate is actually enforcing — lets monitoring catch a public host
             # accidentally running open (enabled but no signing secret configured), SA-01/SA-12.
             "auth_active": auth_active(settings),
+            # Whether Host-header validation is active (SA-09) — monitoring can confirm the public
+            # host restricts Host rather than answering for any name.
+            "trusted_hosts": _trusted_host_allowlist(settings) is not None,
             "cache_max_bytes": settings.api_cache_max_bytes,
             "static_entry_ttl_s": settings.api_static_entry_ttl_s,
             "max_request_bytes": settings.api_max_request_bytes,

@@ -295,6 +295,16 @@ class Settings(BaseSettings):
     # production should not publish its full request surface. Dev/staging can set it to 1.
     docs_enabled: bool = False
 
+    # Host-header allowlist for TrustedHostMiddleware (SA-09). None (default) leaves host
+    # validation OFF so dev, CLI, the tailnet beta, and the offline TestClient (Host
+    # "testserver") are unaffected. On the PUBLIC host set it to the app's public name(s), e.g.
+    # UPSTREAMWX_API_TRUSTED_HOSTS=["app.upstreamwx.com"]: nginx's server_name protects the edge,
+    # but a direct hit on the loopback uvicorn (or a drifted edge) then still rejects an unknown
+    # Host with 400. The loopback names (127.0.0.1/localhost/::1) are always appended in-app so the
+    # direct /v1/health probe (deploy.sh, monitoring) and a local uvicorn keep working; Starlette
+    # strips the port before matching, so the bind port needs no special-casing.
+    api_trusted_hosts: list[str] | None = None
+
     def ensure_data_dir(self) -> Path:
         """Create and return the data cache directory."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
