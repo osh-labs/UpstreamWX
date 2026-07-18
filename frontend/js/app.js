@@ -191,20 +191,26 @@ function hasStoredBriefing() {
   return !!_hasStored;
 }
 
-// True when the persisted briefing was generated for the same mission the app is
-// about to request — compared on the fields that change the product (point, window,
-// activity, slot, RoC). A mismatch is surfaced in the status, never silently shown.
-function storedSpecMatches(stored, spec) {
+// Compare a persisted briefing's mission against the one the app is about to request.
+// The *expedition* (its identity) is the point + activity + slot; the window and RoC are
+// refinements of that same trip. Keeping the two distinct matters because the boot
+// roll-forward (issue #122) advances a stale window without changing the expedition — a
+// pure window shift must NOT read as "a different expedition" (a false alarm that fired when
+// reopening after several days). A mismatch is surfaced in the status, never silently shown.
+// Returns { sameExpedition, sameWindow }.
+function storedSpecComparison(stored, spec) {
   const a = stored && stored.spec, b = spec;
-  if (!a || !b) return false;
+  if (!a || !b) return { sameExpedition: false, sameWindow: false };
   const near = (x, y) => Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 1e-6;
   const roc = (s) => (Number.isFinite(s.radius_km) ? s.radius_km : ROC_DEFAULT_MI * MI_TO_KM);
-  return (
+  const sameExpedition =
     near(a.lat, b.lat) && near(a.lon, b.lon) &&
-    a.activity === b.activity && !!a.slot === !!b.slot &&
+    a.activity === b.activity && !!a.slot === !!b.slot;
+  const sameWindow =
+    sameExpedition &&
     String(a.start) === String(b.start) && String(a.end) === String(b.end) &&
-    near(roc(a), roc(b))
-  );
+    near(roc(a), roc(b));
+  return { sameExpedition, sameWindow };
 }
 
 // Human age of an ISO timestamp: "just now", "12 min ago", "3 h ago", "2 d ago".
@@ -226,10 +232,15 @@ function restoreStoredBriefing(spec) {
   const stored = loadStoredBriefing();
   if (!stored) return false;
   state.fromCache = true;
+  const cmp = storedSpecComparison(stored, spec);
   state.cachedRestore = {
     stored_at: stored.stored_at,
     name: (stored.briefing.mission && stored.briefing.mission.name) || stored.spec?.name || "expedition",
-    mismatch: !storedSpecMatches(stored, spec),
+    // A genuinely different trip (moved point / changed activity) vs. the same trip at a
+    // different window (e.g. the boot roll-forward) — worded distinctly so the latter no
+    // longer masquerades as "a different expedition".
+    mismatch: !cmp.sameExpedition,
+    windowMismatch: cmp.sameExpedition && !cmp.sameWindow,
   };
   try {
     renderAll(stored.briefing);
@@ -653,7 +664,7 @@ async function refresh(spec) {
     completeProgress();
     const transient = !!e && (e.retryable || e instanceof TypeError);
     if (transient) {
-      showBusyBanner(spec);
+      showBusyBanner();
       // Nothing on screen to keep (boot never rendered): restore the persisted last
       // briefing, clearly labeled with its age, instead of leaving the skeleton up.
       if (!state.briefing && restoreStoredBriefing(spec)) return;
@@ -679,19 +690,18 @@ async function refresh(spec) {
 }
 
 // Transient-failure banner: a 503/504/network error during generation shows a yellow bar with a
-// Retry button that re-runs the same mission spec. The button is wired once, lazily.
-function showBusyBanner(spec) {
-  state.retrySpec = spec;
+// Retry button. Retry does a hard reload (window.location.reload), not an in-place re-fetch:
+// an in-place retry can't recover a boot that half-rendered or wedged, and the banner sits over
+// the header's reload control, so it must itself be the reliable "start over". The button is
+// wired once, lazily.
+function showBusyBanner() {
   const el = document.getElementById("busy-banner");
   if (!el) return;
   el.hidden = false;
   const btn = document.getElementById("busy-retry");
   if (btn && !btn._wired) {
     btn._wired = true;
-    btn.addEventListener("click", () => {
-      hideBusyBanner();
-      refresh(state.retrySpec || savedSpec() || DEFAULT_SPEC);
-    });
+    btn.addEventListener("click", () => window.location.reload());
   }
 }
 
@@ -2272,7 +2282,9 @@ function renderStatus(b) {
     });
     const note = c.mismatch
       ? "Saved for a different expedition than your current plan."
-      : "Not live — retry when back online for a current briefing.";
+      : c.windowMismatch
+        ? "Saved for a different window than your current plan — retry when online."
+        : "Not live — retry when back online for a current briefing.";
     statusEl.innerHTML = `
       <span class="cached-badge">${icon("wifi_off", "")} <span>Cached<br>briefing</span></span>
       <span class="status-line__currency">Saved briefing from ${esc(when)} (${esc(fmtAge(c.stored_at))}) — “${esc(c.name)}”.<br>${esc(note)}</span>`;
@@ -3015,6 +3027,10 @@ function showWindowErrorCard(spec) {
     `type="button">Update mission</button></div></section>`;
   const btn = document.getElementById("window-error-update");
   if (btn) btn.addEventListener("click", () => openMissionPlanner(freshenStaleSpec(spec)));
+  // The card is a terminal "needs action" state, not a load in progress — clear the
+  // "Generating briefing…" status the loading skeleton left behind so it doesn't linger.
+  const statusEl = document.getElementById("status");
+  if (statusEl) statusEl.innerHTML = "";
 }
 
 async function main() {
@@ -3030,51 +3046,65 @@ async function main() {
   initPlannerControls();
   initSettingsControls();
   initInstallPrompt();
-  // Boot spec: the saved mission, or the seed default on first run. Advance a window that
-  // has aged out of the serviceable horizon *before* the first fetch so reopening the
-  // installed PWA days later never submits a stale window and dead-ends on a 422 with no
-  // in-app recovery (issue #122). Persist the advance only for a real saved mission — the
-  // seed default must stay unsaved so first run still opens the planner.
   const saved = savedSpec();
-  const bootSpec = freshenStaleSpec(saved || DEFAULT_SPEC);
-  if (saved && bootSpec !== saved) persistSpec(bootSpec);
-  // First run with no saved mission: present the planner so the user picks a
-  // point. Defer until the ack is accepted when it's showing this load.
-  const promptFirstRun = () => {
-    if (savedSpec()) return;
-    openMissionPlanner(state.briefing ? specFromBriefing(state.briefing) : bootSpec);
+  // A saved mission whose window has passed its useful life is *dormant*: reopening the app
+  // days later must not silently brief a window the user never chose (issue #122's earlier
+  // auto-advance), nor dead-end on a stale-window 422. Route them into the planner instead.
+  const missionStale = !!saved && isWindowStale(saved);
+
+  // Open the planner on boot when there is no saved mission (first run) or the saved mission
+  // is dormant — pre-filled so the user reconfirms the trip. A *current* saved mission needs
+  // no prompt. Deferred behind the ack when that is showing this load.
+  const openPlannerOnBoot = () => {
+    const cur = savedSpec();
+    if (cur && !isWindowStale(cur)) return;
+    const seed = cur || (state.briefing ? specFromBriefing(state.briefing) : DEFAULT_SPEC);
+    openMissionPlanner(seed);
   };
-  const ackShown = maybeShowAck(promptFirstRun);
+  const ackShown = maybeShowAck(openPlannerOnBoot);
   // Registered before the first fetch so connectivity flips re-render the status
-  // line even when boot ends on the offline-restore or error path.
+  // line even when boot ends on the offline-restore, dormant, or error path.
   window.addEventListener("online", () => renderStatus(state.briefing));
   window.addEventListener("offline", () => { state.fromCache = true; renderStatus(state.briefing); });
+
+  // Dormant mission: don't spend a live fetch on a past window (it would 422, and advancing it
+  // would brief a trip the user never chose). Show the last cached briefing for context if we
+  // have one — else an actionable "window has passed" card — then route into the planner.
+  if (missionStale) {
+    completeProgress();
+    if (!restoreStoredBriefing(saved)) showWindowErrorCard(saved);
+    if (!ackShown) openPlannerOnBoot();
+    return;
+  }
+
+  // Current saved mission, or the seed default on first run. freshenStaleSpec only advances
+  // the default seed (whose window is always in the past) so its first-run fetch succeeds; a
+  // real saved mission is already current here (dormant ones took the branch above).
+  const bootSpec = freshenStaleSpec(saved || DEFAULT_SPEC);
   let b;
   startProgress();
   try {
     b = await loadBriefing(bootSpec);
   } catch (e) {
     // A transient failure (server busy / gateway timeout / network) gets the retry banner so the
-    // user can re-run without reloading the app; other errors show the inline explanation.
+    // user can hard-reload; other errors show the inline explanation.
     completeProgress();
     if (e && (e.retryable || e instanceof TypeError)) {
-      showBusyBanner(bootSpec);
+      showBusyBanner();
       // Offline (or transient outage) at boot: render the persisted last briefing,
       // clearly labeled with its stored-at age, instead of a dead-end retry banner
       // (FR-26/FR-28 — the last briefing stays reviewable at a no-signal trailhead).
       if (restoreStoredBriefing(bootSpec)) {
-        if (!ackShown) promptFirstRun();
+        if (!ackShown) openPlannerOnBoot();
         return;
       }
     }
-    // A 422 means the window is outside the serviceable horizon (stale, or planned beyond the
-    // forecast reach). Roll-forward above prevents the common stale case, but a residual 422
-    // must never be a dead end on an installed PWA with no reload escape (issue #122): show an
-    // actionable card offering a one-tap "Update mission" into the planner so the user can set a
-    // current window. A 422 means the server answered, so they're online — no offline-restore.
+    // A residual 422 (e.g. a window planned beyond the forecast horizon) must never dead-end on
+    // an installed PWA with no reload escape: show an actionable "Update mission" card into the
+    // planner. A 422 means the server answered, so they're online — no offline-restore.
     if (e && e.status === 422) {
       showWindowErrorCard(bootSpec);
-      if (!ackShown) promptFirstRun();
+      if (!ackShown) openPlannerOnBoot();
       return;
     }
     document.getElementById("view-overview").innerHTML =
@@ -3086,7 +3116,7 @@ async function main() {
   completeProgress();
   renderAll(b);
   streamSummary(bootSpec);
-  if (!ackShown) promptFirstRun();
+  if (!ackShown) openPlannerOnBoot();
 }
 
 // ── Release / stale-client detection ──────────────────────────────────
