@@ -215,12 +215,13 @@ else
 fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
-if nginx -t >/dev/null 2>&1; then
+if _nginx_out="$(nginx -t 2>&1)"; then
     systemctl enable --now nginx >/dev/null 2>&1 || true
     systemctl reload nginx
     ok "nginx configured (TLS ${DEPLOY_TLS_ENABLE:-0})"
 else
-    warn "nginx -t failed — review the site config before reloading nginx"
+    warn "nginx -t failed — review before reloading nginx. Output:"
+    printf '%s\n' "$_nginx_out" >&2
 fi
 
 # --- 6b. TLS via certbot --webroot (SA-09) -------------------------------------------
