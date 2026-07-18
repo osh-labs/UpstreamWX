@@ -1,11 +1,16 @@
 #!/usr/bin/env bash
-# UpstreamWX — update + restart the backend on the host (run after bootstrap.sh).
+# UpstreamWX — build + activate a release on the host (run after bootstrap.sh).
 #
 #   sudo deploy/deploy.sh [git-ref]        # ref defaults to DEPLOY_BRANCH
 #
-# Idempotent and safe to re-run. It fetches the requested ref as the service user,
-# refreshes the venv (uv), reinstalls the package, restarts the systemd service, and
-# blocks on a /v1/health check so a bad deploy fails loudly instead of silently.
+# Idempotent and safe to re-run. SA-06 atomic-release model: it fetches the ref into a
+# root-owned git mirror, verifies a signed tag if required (SA-07), builds a fresh
+# root-owned release (clean export + `uv sync --frozen` .venv + browser) under
+# releases/<sha>, warms the ensemble caches, then atomically flips the `current` symlink
+# and restarts. It blocks on /v1/health and ROLLS BACK the symlink to the previous release
+# if the new one is unhealthy — so a bad deploy fails loudly and self-heals instead of
+# leaving the service down. The release tree is read-only to the runtime account, closing
+# the last surface where that account could influence what a later root deploy runs.
 #
 # Run on the server (SSH in, then invoke it); the server pulls its own code from git.
 
@@ -15,109 +20,24 @@ require_root
 
 REF="${1:-$DEPLOY_BRANCH}"
 # -H sets HOME to the service user's home ($DEPLOY_APP_DIR); without it sudo keeps the
-# invoking user's HOME (/home/ubuntu), which the service user can't read — uv then fails
-# to open its config/cache there (Permission denied).
+# invoking user's HOME (/home/ubuntu), which the service user can't read.
 RUN_USER="sudo -u $DEPLOY_USER -H"
 
-[ -d "$DEPLOY_APP_DIR/.git" ] || die "no checkout at $DEPLOY_APP_DIR — run bootstrap.sh first"
-command -v uv >/dev/null 2>&1 || die "uv not found on PATH"
+command -v uv >/dev/null 2>&1 || die "uv not found on PATH — run bootstrap.sh first"
+[ -d "$DEPLOY_REPO_MIRROR/.git" ] || die "no git mirror at $DEPLOY_REPO_MIRROR — run bootstrap.sh first"
 
-# Run from inside the app dir. uv discovers config by walking UP from the CWD; if invoked
-# from the sudoer's home (/home/ubuntu, mode 0750) the service user can't read it and uv
-# dies with "failed to open uv.toml: Permission denied". The app dir is service-readable.
-cd "$DEPLOY_APP_DIR"
+# --- 1. Build the release into a fresh root-owned dir (SA-06 atomic releases) ---------
+# build_release fetches the mirror, verifies a signed tag if required (SA-07), exports a
+# clean tree to releases/<sha>, builds a root-owned .venv (uv sync --frozen) + browser, and
+# stamps frontend/version.json. Nothing is activated yet — the running service is untouched
+# until the symlink flip below, so a failed build cannot take the service down.
+PREV_TARGET="$(current_release_target)"      # for rollback (empty on the very first deploy)
+build_release "$REF"
+DEPLOYED_SHA="$RELEASE_SHA"
+RELEASE="$RELEASE_NAME"
 
-# --- 1. Sync source to the requested ref (branch, tag, or SHA) ------------------------
-log "fetching $REF into $DEPLOY_APP_DIR"
-$RUN_USER git -C "$DEPLOY_APP_DIR" fetch origin --prune --tags
-if $RUN_USER git -C "$DEPLOY_APP_DIR" show-ref --verify --quiet "refs/remotes/origin/$REF"; then
-    $RUN_USER git -C "$DEPLOY_APP_DIR" checkout -B "$REF" "origin/$REF"
-else
-    $RUN_USER git -C "$DEPLOY_APP_DIR" checkout --force "$REF"
-fi
-DEPLOYED_SHA="$($RUN_USER git -C "$DEPLOY_APP_DIR" rev-parse --short HEAD)"
-ok "checked out $REF @ $DEPLOYED_SHA"
-
-# --- 1b. Stamp the release into frontend/version.json --------------------------------
-# A single source of truth for "what's deployed": prefer the nearest tag (production
-# deploys a tag), else the short SHA. /v1/health echoes it for ops, and the PWA polls
-# version.json to nudge stale clients to reload after a release (docs/deployment-workflow.md).
-# It's git-ignored and untracked, so the checkout above never clobbers or conflicts with it.
-RELEASE="$($RUN_USER git -C "$DEPLOY_APP_DIR" describe --tags --always 2>/dev/null || echo "$DEPLOYED_SHA")"
-BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-$RUN_USER tee "$DEPLOY_APP_DIR/frontend/version.json" >/dev/null <<EOF
-{"version": "$RELEASE", "sha": "$DEPLOYED_SHA", "built_at": "$BUILT_AT"}
-EOF
-ok "stamped release $RELEASE"
-
-# --- 2. Refresh the virtualenv from the committed lockfile (exact, frozen) ------------
-# SA-06: install the EXACT resolved set from the committed uv.lock rather than re-resolving
-# unbounded deps at deploy time, so two deploys of the same ref get the same packages and a
-# rollback restores the same environment. `--frozen` fails loudly if the lock is out of date
-# with pyproject (no silent re-resolve); `--no-dev` omits the pytest/ruff dev group. Runs as
-# the service user (never root) into the service-owned .venv.
-log "syncing virtualenv from uv.lock (uv sync --frozen --no-dev)"
-$RUN_USER uv sync --frozen --no-dev --python 3.11
-ok "dependencies installed (exact, from uv.lock)"
-
-# Fail fast if the GRIB stack can't import (the most likely host-specific breakage).
-if ! $RUN_USER "$DEPLOY_APP_DIR/.venv/bin/python" -c "import cfgrib" 2>/dev/null; then
-    warn "cfgrib failed to import — check ecCodes (see deploy/README.md troubleshooting)"
-fi
-
-# Install a Chromium binary for server-side PDF export (FR-27, sitrep/pdf.py).
-#
-# Strategy: try Playwright's own managed Chromium first (preferred — version-pinned,
-# known-good with the installed Playwright Python package).  If the distro isn't
-# supported yet (e.g. Ubuntu 26.04 before Playwright catches up), fall back to the
-# system Chromium from apt.  pdf.py searches both locations via _chromium_path().
-PLAYWRIGHT_BROWSERS_DIR="$DEPLOY_APP_DIR/.playwright-browsers"
-log "ensuring Chromium is available for PDF export"
-# Install to two locations so the binary is found regardless of whether the running
-# service has PLAYWRIGHT_BROWSERS_PATH set in its environment (it may not, if the unit
-# file predates that env var or the __APP_DIR__ substitution failed on this host).
-#
-# Location 1: explicit PLAYWRIGHT_BROWSERS_PATH dir (matches the systemd unit template).
-$RUN_USER env PLAYWRIGHT_BROWSERS_PATH="$PLAYWRIGHT_BROWSERS_DIR" \
-    "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null \
-    && ok "Playwright Chromium ready at $PLAYWRIGHT_BROWSERS_DIR" || true
-# Location 2: default $HOME/.cache/ms-playwright — used when PLAYWRIGHT_BROWSERS_PATH is
-# absent from the running process.  -H sets HOME=$DEPLOY_APP_DIR (via sudo -H in RUN_USER)
-# so the install lands at $DEPLOY_APP_DIR/.cache/ms-playwright/, exactly where Playwright
-# looks when the env var is unset.
-$RUN_USER "$DEPLOY_APP_DIR/.venv/bin/playwright" install chromium 2>/dev/null \
-    && ok "Playwright Chromium also ready at $DEPLOY_APP_DIR/.cache/ms-playwright" || true
-# Chromium's OS-level shared libraries (libatk, libnss3, libx11, …) are installed ONCE, as
-# root, from bootstrap.sh's reviewed static apt manifest — NOT by executing the service-user-
-# owned `.venv/bin/playwright install-deps` as root, which would cross the deploy trust
-# boundary (a compromised venv → root code execution, SA-06). If Playwright's own Chromium
-# won't run on this distro, fall back to Google Chrome from its signed apt repo; root running
-# apt is legitimate and never executes venv code. Best-effort throughout (NFR-6): a missing
-# browser only makes the PDF endpoint return 503, and an unnecessary fallback install is harmless.
-if _usable_chromium_present; then
-    ok "Chromium available for PDF export"
-elif command -v apt-get >/dev/null 2>&1; then
-    # Ubuntu 22.04+ ships Chromium as a snap only; a system service account has no snap session,
-    # so the snap wrapper fails headlessly. Google Chrome's apt package works without snap.
-    warn "no usable Playwright Chromium — installing Google Chrome from its signed apt repo"
-    if ! command -v google-chrome-stable >/dev/null 2>&1 \
-            && ! command -v google-chrome >/dev/null 2>&1; then
-        log "adding Google Chrome apt repository"
-        curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-            | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
-        echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] \
-http://dl.google.com/linux/chrome/deb/ stable main" \
-            > /etc/apt/sources.list.d/google-chrome.list
-        DEBIAN_FRONTEND=noninteractive apt-get update -qq
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq google-chrome-stable \
-            || warn "google-chrome-stable install failed — PDF export endpoint will return 503"
-    fi
-    _usable_chromium_present \
-        && ok "Google Chrome available for PDF export" \
-        || warn "no usable Chromium found — PDF export endpoint will return 503"
-else
-    warn "no usable Chromium and no apt — PDF export endpoint will return 503"
-fi
+# The GEFS/REFS warm + REFS-cutover-gate steps below run the NEW release's interpreter.
+RELEASE_PY="$RELEASE_DIR/.venv/bin/python"
 
 # --- 2b. Warm the REFS ensemble cache ------------------------------------------------
 # REFS is cache-driven: the scheduler fills it on 00/06/12/18Z cycle boundaries, so a
@@ -152,7 +72,7 @@ fi
 # file still selects the prototype feed, so the operator flips UPSTREAMWX_REFS_SOURCE in the
 # env file rather than silently running the public beta on a prototype bucket. Non-fatal
 # (a warning, not a block) so an early/dev deploy is unaffected.
-_refs_gate="$($RUN_USER env "${_uwx_env[@]}" "$DEPLOY_APP_DIR/.venv/bin/python" - <<'PYEOF' || true
+_refs_gate="$($RUN_USER env "${_uwx_env[@]}" "$RELEASE_PY" - <<'PYEOF' || true
 import sys
 from datetime import UTC, date, datetime
 try:
@@ -175,7 +95,7 @@ fi
 # Non-fatal: a warm failure degrades REFS (scheduler recovers on next tick) but must not
 # block the deploy.
 if ! $RUN_USER env "${_uwx_env[@]}" \
-        "$DEPLOY_APP_DIR/.venv/bin/python" - <<'PYEOF'
+        "$RELEASE_PY" - <<'PYEOF'
 import sys
 import logging
 from datetime import UTC, datetime
@@ -294,7 +214,7 @@ fi
 # Reuses the $_uwx_env collected for the REFS warm above.
 log "checking GEFS ensemble cache"
 if ! $RUN_USER env "${_uwx_env[@]}" \
-        "$DEPLOY_APP_DIR/.venv/bin/python" - <<'PYEOF'
+        "$RELEASE_PY" - <<'PYEOF'
 import sys
 import logging
 from datetime import UTC, datetime
@@ -383,28 +303,43 @@ then
     warn "GEFS cache warm had issues (see above) — GEFS serves on demand until the scheduler fills it"
 fi
 
-# --- 3. Restart the service ----------------------------------------------------------
-log "restarting $DEPLOY_SERVICE"
-systemctl restart "$DEPLOY_SERVICE"
+# --- 3. Activate the new release + restart (atomic flip, SA-06) -----------------------
+# Flip `current` to the freshly-built release and restart. The service resolves the symlink
+# on start, so it moves cleanly to the new release. If health fails, roll the symlink back to
+# the previous release and restart — a true source+deps+browser rollback.
+_restart_and_check() {
+    # _restart_and_check LABEL -> 0 healthy, 1 not
+    systemctl restart "$DEPLOY_SERVICE"
+    local url="http://${DEPLOY_BIND_HOST}:${DEPLOY_BIND_PORT}/v1/health" i
+    for i in $(seq 1 20); do
+        if curl -fsS "$url" >/dev/null 2>&1; then
+            ok "healthy ($1): $(curl -fsS "$url")"
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
 
-# --- 4. Health check (loopback) ------------------------------------------------------
-log "waiting for /v1/health"
-url="http://${DEPLOY_BIND_HOST}:${DEPLOY_BIND_PORT}/v1/health"
-healthy=0
-for i in $(seq 1 20); do
-    if curl -fsS "$url" >/dev/null 2>&1; then
-        ok "healthy: $(curl -fsS "$url")"
-        healthy=1
-        break
-    fi
-    sleep 1
-done
-if [ "$healthy" -ne 1 ]; then
-    warn "service did not become healthy in time — recent logs:"
+log "activating release $DEPLOYED_SHA and restarting $DEPLOY_SERVICE"
+activate_release "$RELEASE_DIR"
+if ! _restart_and_check "new release"; then
+    warn "service did not become healthy on $DEPLOYED_SHA — recent logs:"
     # The API logs to a private journald namespace (LogNamespace=upstreamwx); read from it.
     journalctl --namespace=upstreamwx -u "$DEPLOY_SERVICE" -n 40 --no-pager || true
-    die "deploy failed health check"
+    if [ -n "$PREV_TARGET" ] && [ -f "$PREV_TARGET/.release-ok" ]; then
+        warn "rolling back to the previous release: $PREV_TARGET"
+        activate_release "$PREV_TARGET"
+        if _restart_and_check "rollback"; then
+            die "deploy failed health check — ROLLED BACK to $(basename "$PREV_TARGET"). Investigate $DEPLOYED_SHA before retrying."
+        fi
+        die "deploy failed health check AND rollback did not recover — service is DOWN. Check journalctl."
+    fi
+    die "deploy failed health check (no previous release to roll back to)"
 fi
+
+# --- 3b. Prune old releases (keep DEPLOY_KEEP_RELEASES; never the active one) ----------
+prune_releases
 
 # --- 4b. Public TLS gate (SA-09) -----------------------------------------------------
 # The SA-01 session cookie is Secure, so the access gate is inert without live HTTPS. When
@@ -422,9 +357,22 @@ if [ "$DEPLOY_REQUIRE_HTTPS" = "1" ]; then
         "http://${DEPLOY_APP_SERVER_NAME}/v1/health" 2>/dev/null || echo 000)"
     case "$http_code" in
         301|308) ok "HTTP -> HTTPS redirect in place ($http_code)" ;;
-        *) warn "HTTP did not redirect to HTTPS (got $http_code) — check the certbot :80 redirect block (SA-09)" ;;
+        *) warn "HTTP did not redirect to HTTPS (got $http_code) — check the :80 redirect block (SA-09)" ;;
+    esac
+
+    # Activation checklist (issue #132): on a PUBLIC deploy the access gate + host allowlist
+    # must actually be active. Read them off /v1/health (echoed by the app) and warn loudly if
+    # either is off — a public host with auth_active=false or trusted_hosts=false is a misconfig.
+    _health_json="$(curl -fsS --max-time 15 "$https_url" 2>/dev/null || echo '{}')"
+    case "$_health_json" in
+        *'"auth_active": true'*|*'"auth_active":true'*) ok "access gate active (auth_active=true)" ;;
+        *) warn "auth_active is NOT true on the public endpoint — set UPSTREAMWX_SESSION_SECRET + UPSTREAMWX_API_AUTH_REQUIRED=1 in $DEPLOY_ENV_FILE (SA-01)" ;;
+    esac
+    case "$_health_json" in
+        *'"trusted_hosts": true'*|*'"trusted_hosts":true'*) ok "Host allowlist active (trusted_hosts=true)" ;;
+        *) warn "trusted_hosts is NOT true — set UPSTREAMWX_API_TRUSTED_HOSTS=[\"$DEPLOY_APP_SERVER_NAME\"] in $DEPLOY_ENV_FILE (SA-09)" ;;
     esac
 fi
 
-log "deployed $REF @ $DEPLOYED_SHA"
+log "deployed $RELEASE ($DEPLOYED_SHA) — current -> $(basename "$(current_release_target)")"
 exit 0

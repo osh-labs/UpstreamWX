@@ -138,25 +138,33 @@ async def render_pdf(briefing: dict) -> bytes:
         raise FileNotFoundError(f"PDF template not found: {template_path}")
 
     exe = _chromium_path()
+    # SA-08: the production service runs as a NON-root service user and the systemd unit now
+    # permits the user namespace Chromium's renderer sandbox needs (RestrictNamespaces relaxed
+    # to allow CLONE_NEWUSER — see deploy/systemd/upstreamwx-api.service), so the native
+    # in-browser sandbox is ON there. --no-sandbox is added back ONLY when running as root
+    # (dev shells, the deploy container, CI): Chromium refuses its setuid/namespace sandbox as
+    # uid 0, so without the flag the renderer would fail to launch. UPSTREAMWX_PDF_NO_SANDBOX
+    # forces the flag for hosts where the namespace sandbox is unavailable (an explicit override,
+    # not the default). The process is additionally contained by the systemd sandbox
+    # (NoNewPrivileges, ProtectSystem=strict, PrivateTmp, ProtectHome) and the request-abort gate
+    # below (no network, no file:// beyond the template).
+    _no_sandbox_env = os.environ.get("UPSTREAMWX_PDF_NO_SANDBOX", "").lower()
+    _force_no_sandbox = _no_sandbox_env in {"1", "true", "yes"}
+    _running_as_root = hasattr(os, "geteuid") and os.geteuid() == 0
+    args = [
+        "--disable-dev-shm-usage",   # PrivateTmp constrains /dev/shm; fall back to /tmp
+        "--disable-crash-reporter",  # suppress crashpad trying to write a database
+        "--disable-gpu",             # no GPU in a headless service; removes that surface
+        "--disable-extensions",      # load no extensions
+        "--disable-background-networking",  # no Chromium phone-home (the gate blocks it too)
+        "--disable-sync",            # no account sync
+    ]
+    if _force_no_sandbox or _running_as_root:
+        # Prepend so it takes effect before Chromium initialises the (unavailable) sandbox.
+        args.insert(0, "--no-sandbox")
     launch_kwargs: dict = {
         "headless": True,
-        "args": [
-            # NOTE (SA-08): the renderer runs WITHOUT Chromium's native sandbox because the
-            # systemd unit's RestrictNamespaces=true blocks the user namespace it needs. The
-            # process is instead contained by the systemd sandbox (NoNewPrivileges,
-            # ProtectSystem=strict, PrivateTmp, ProtectHome, RestrictNamespaces) and by the
-            # request-abort gate below (no network, no file:// beyond the template). Restoring the
-            # in-browser sandbox (relax RestrictNamespaces for user namespaces + drop --no-sandbox)
-            # or isolating the render in a separate container is host-dependent — tracked for the
-            # deploy pass. The flags below trim the render's attack surface in the meantime.
-            "--no-sandbox",              # RestrictNamespaces=true blocks the renderer sandbox
-            "--disable-dev-shm-usage",   # PrivateTmp constrains /dev/shm; fall back to /tmp
-            "--disable-crash-reporter",  # suppress crashpad trying to write a database
-            "--disable-gpu",             # no GPU in a headless service; removes that surface
-            "--disable-extensions",      # load no extensions
-            "--disable-background-networking",  # no Chromium phone-home (the gate blocks it too)
-            "--disable-sync",            # no account sync
-        ],
+        "args": args,
     }
     if exe:
         launch_kwargs["executable_path"] = exe

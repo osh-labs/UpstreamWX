@@ -1,25 +1,26 @@
 name: CI
 
-# Gate every change on the hermetic test suite + lint BEFORE it can reach main.
-# This is the safety net the deploy scripts assume: main is only ever as good as
-# the last green CI run, and production deploys an immutable tag cut from main.
+# Gate every change on the hermetic test suite + lint BEFORE it can reach main, plus a
+# supply-chain gate (SA-07): dependency audit, secret scan, and an SBOM artifact.
 #
-# Hermetic by design — pytest defaults to `-m 'not network'` (see pyproject.toml),
-# so this runs fully offline against the committed fixtures and needs no secrets.
-# The opt-in live tests (`-m network`, NOMADS/AWS/USGS) are intentionally NOT run
-# here; run them by hand or on a schedule against staging.
+# main is only ever as good as the last green CI run, and production deploys an immutable,
+# signed tag cut from main (deploy.sh verifies the tag signature when
+# DEPLOY_VERIFY_TAG_SIGNATURE=1).
 #
-# To make this a required check (so red code cannot merge):
-#   repo Settings -> Branches -> Add branch protection rule for `main`
-#   -> Require status checks to pass -> select "test".
-# See docs/deployment-workflow.md for the full release discipline.
+# Hermetic by design — pytest defaults to `-m 'not network'` (see pyproject.toml), so `test`
+# runs fully offline against committed fixtures and needs no secrets. Opt-in live tests
+# (`-m network`, NOMADS/AWS/USGS) are intentionally NOT run here.
+#
+# SA-07: every action is pinned to a full commit SHA (a moving @v4 tag can be repointed at
+# attacker code); the trailing comment records the human-readable version. To make these
+# required checks: repo Settings -> Branches -> branch protection for `main` -> Require status
+# checks -> select "test" and "supply-chain". See docs/deployment-workflow.md.
 
 on:
   pull_request:
   push:
     branches: [main]
 
-# A newer push to the same branch/PR makes in-flight runs obsolete; cancel them.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -31,10 +32,10 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
 
       - name: Set up Python 3.11
         run: uv venv --python 3.11
@@ -47,3 +48,55 @@ jobs:
 
       - name: Test (hermetic — offline, committed fixtures)
         run: uv run pytest
+
+  supply-chain:
+    # SA-07: dependency-audit + secret-scan + SBOM. Dovetails with the committed uv.lock —
+    # the audit and SBOM describe the EXACT resolved set the host installs with
+    # `uv sync --frozen`. Runs offline against the lockfile; no project install needed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5
+
+      - name: Export the locked dependency set
+        # The exact resolved set from uv.lock (prod only), as a requirements file the audit +
+        # SBOM tools consume without installing anything.
+        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.locked.txt
+
+      - name: Dependency audit (pip-audit)
+        # Fails on a known-vulnerable dependency. Escape hatch for an unfixable transitive
+        # advisory: add `--ignore-vuln GHSA-xxxx` here with a tracking note.
+        run: uvx pip-audit --strict --requirement requirements.locked.txt
+
+      - name: Secret scan (detect-secrets)
+        # Fail if any high-signal secret is committed. Committed test fixtures (GRIB2 subsets,
+        # golden JSON) are excluded to avoid entropy false positives — .env is git-ignored and
+        # never in the tree, so a hit here is a real leak.
+        run: |
+          uvx detect-secrets scan --all-files \
+            --exclude-files 'tests/fixtures/.*' \
+            --exclude-files '.*\.grib2$' \
+            --exclude-files 'uv\.lock$' > detect-secrets.report.json
+          python - <<'PY'
+          import json, sys
+          report = json.load(open("detect-secrets.report.json"))
+          results = report.get("results", {})
+          if results:
+              print("Potential secrets detected in:")
+              for path in results:
+                  print(f"  - {path}")
+              sys.exit(1)
+          print("No secrets detected.")
+          PY
+
+      - name: Generate SBOM (CycloneDX)
+        run: uvx --from 'cyclonedx-bom>=4,<5' cyclonedx-py requirements requirements.locked.txt --outfile sbom.cdx.json
+
+      - name: Upload SBOM artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          if-no-files-found: error
