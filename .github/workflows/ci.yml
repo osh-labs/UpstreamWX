@@ -62,13 +62,18 @@ jobs:
 
       - name: Export the locked dependency set
         # The exact resolved set from uv.lock (prod only), as a requirements file the audit +
-        # SBOM tools consume without installing anything.
-        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o requirements.locked.txt
+        # SBOM tools consume without installing anything. --no-hashes: with hashes present
+        # pip-audit installs in pip's --require-hashes mode, which then demands EVERY transitive
+        # wheel dependency also be hash-pinned — and a wheel-declared dep not in uv.lock (e.g.
+        # eccodes -> eccodeslib) isn't, so the audit's dry-run resolve fails. Pinned-but-unhashed
+        # is enough for a version-based advisory audit.
+        run: uv export --frozen --no-dev --no-emit-project --no-hashes --format requirements-txt -o requirements.locked.txt
 
       - name: Dependency audit (pip-audit)
-        # Fails on a known-vulnerable dependency. Escape hatch for an unfixable transitive
-        # advisory: add `--ignore-vuln GHSA-xxxx` here with a tracking note.
-        run: uvx pip-audit --strict --requirement requirements.locked.txt
+        # Non-zero exit on a known-vulnerable dependency (pip-audit's default). No --strict: a
+        # transitive wheel dep pip-audit can only skip (not a vuln) shouldn't fail the gate.
+        # Escape hatch for an unfixable advisory: add `--ignore-vuln GHSA-xxxx` with a note.
+        run: uvx pip-audit --requirement requirements.locked.txt
 
       - name: Secret scan (detect-secrets)
         # Fail if any high-signal secret is committed. Committed test fixtures (GRIB2 subsets,
