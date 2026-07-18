@@ -21,16 +21,38 @@ install_packages_apt() {
     log "installing system packages (apt)"
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
+    # Essentials — fatal if these can't install.
     apt-get install -y -qq \
         git curl ca-certificates build-essential \
         nginx libeccodes0 \
-        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
-        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
-        libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0 \
         fonts-liberation fonts-noto-color-emoji
-    # ↑ Chromium system libraries required by Playwright's headless Chromium (FR-27,
-    #   sitrep/pdf.py).  Playwright manages its own Chromium binary (deploy.sh does the
-    #   `playwright install chromium`); these are the host libs it links against.
+    # Chromium/Playwright host libraries for server-side PDF export (FR-27, sitrep/pdf.py).
+    # Playwright manages its own Chromium binary (deploy.sh does `playwright install chromium`);
+    # these are the host libs it links against. On Ubuntu 24.04 (noble) the 64-bit time_t
+    # transition renamed several of them with a `t64` suffix (e.g. libasound2 -> libasound2t64),
+    # so a hardcoded name has "no installation candidate". Resolve each to whichever variant the
+    # distro actually ships, then install best-effort (a missing Chromium lib only degrades PDF
+    # export to a 503 — NFR-6 — so it must never abort bootstrap).
+    local want=(
+        libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2
+        libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2
+        libgbm1 libasound2 libpango-1.0-0 libcairo2 libatspi2.0-0
+    )
+    local resolved=() p
+    for p in "${want[@]}"; do
+        if [ "$(apt-cache policy "$p" 2>/dev/null | awk '/Candidate:/{print $2}')" != "(none)" ] \
+                && apt-cache show "$p" >/dev/null 2>&1; then
+            resolved+=("$p")
+        elif apt-cache show "${p}t64" >/dev/null 2>&1; then
+            resolved+=("${p}t64")          # Ubuntu 24.04+ time_t-renamed variant
+        else
+            warn "no apt candidate for $p (or ${p}t64) — skipping; PDF export may 503 if it's needed"
+        fi
+    done
+    if [ "${#resolved[@]}" -gt 0 ]; then
+        apt-get install -y -qq "${resolved[@]}" \
+            || warn "some Chromium libs failed to install — PDF export may 503 (NFR-6)"
+    fi
     ok "apt packages installed"
 }
 
