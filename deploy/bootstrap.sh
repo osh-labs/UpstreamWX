@@ -85,20 +85,16 @@ EOF
 configure_auto_updates
 
 # --- 2. uv (Python toolchain, matches the repo) --------------------------------------
-# SA-06: pin the uv installer to an EXACT version (astral's versioned installer URL) rather than
-# piping the always-latest `astral.sh/uv/install.sh` into a root shell — so a deploy can't silently
-# pick up a changed installer, and the toolchain that builds the environment is itself reproducible.
-# Override UV_VERSION to bump. (A published-checksum verification of the installer is a further
-# hardening follow-up; pinning the version is the load-bearing change.)
-UV_VERSION="${UV_VERSION:-0.8.17}"
-if ! command -v uv >/dev/null 2>&1; then
-    log "installing uv $UV_VERSION"
-    curl -LsSf "https://astral.sh/uv/${UV_VERSION}/install.sh" | env UV_INSTALL_DIR=/usr/local/bin sh
-fi
-command -v uv >/dev/null 2>&1 || die "uv install failed; install it manually and re-run"
-ok "uv: $(uv --version)"
+# SA-06: install the EXACT pinned uv, verify a pinned installer checksum if provided, and
+# assert the resulting version — see install_uv_pinned in _lib.sh. Override UV_VERSION to bump
+# and set UV_INSTALLER_SHA256 in config.env to enable full installer verification.
+install_uv_pinned
+export UV_VERSION
 
-# --- 3. Service account + directories ------------------------------------------------
+# --- 3. Service account + directories (SA-06 atomic layout) ---------------------------
+# The base dir ($DEPLOY_APP_DIR) is now ROOT-OWNED: it holds the root-owned git mirror,
+# releases/, and the `current` symlink. The service account may traverse it but must not
+# write into it — the runtime user can no longer drop files that a later root deploy runs.
 if ! getent group "$DEPLOY_GROUP" >/dev/null; then
     groupadd --system "$DEPLOY_GROUP"
 fi
@@ -107,82 +103,158 @@ if ! id "$DEPLOY_USER" >/dev/null 2>&1; then
     useradd --system --gid "$DEPLOY_GROUP" --home-dir "$DEPLOY_APP_DIR" \
             --shell /usr/sbin/nologin "$DEPLOY_USER"
 fi
-install -d -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_APP_DIR"
+install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_APP_DIR"
+install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_RELEASES_DIR"
 install -d -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_DATA_DIR"
 install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_ENV_DIR"
-ok "user + directories ready"
+# ACME http-01 webroot for certbot --webroot (SA-09). World-readable (nginx serves it).
+install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_ACME_WEBROOT"
+ok "user + directories ready (base is root-owned)"
 
-# --- 4. Source checkout --------------------------------------------------------------
-if [ ! -d "$DEPLOY_APP_DIR/.git" ]; then
-    log "cloning $DEPLOY_REPO_URL ($DEPLOY_BRANCH) -> $DEPLOY_APP_DIR"
-    # -H so git runs with the service user's HOME, not the invoking sudoer's (see deploy.sh).
-    sudo -u "$DEPLOY_USER" -H git clone --branch "$DEPLOY_BRANCH" "$DEPLOY_REPO_URL" "$DEPLOY_APP_DIR"
-else
-    ok "repo already present at $DEPLOY_APP_DIR (deploy.sh will update it)"
+# --- 3b. Migrate an old in-place checkout (pre-SA-06) ---------------------------------
+# Earlier hosts had a service-user-owned git checkout AT $DEPLOY_APP_DIR (with .git/.venv at
+# the top level). The atomic model builds into releases/<sha> and points `current` there, so
+# the old top-level tree is vestigial. Move it aside ONCE so nothing service-writable remains
+# in the run path (the base is now root-owned; systemd runs from current/). Data, env, and
+# systemd/nginx configs live outside $DEPLOY_APP_DIR and are untouched.
+if [ -d "$DEPLOY_APP_DIR/.git" ] && [ ! -e "$DEPLOY_APP_DIR/.pre-atomic" ]; then
+    log "migrating old in-place checkout aside -> $DEPLOY_APP_DIR/.pre-atomic"
+    install -d -o root -g root -m 0700 "$DEPLOY_APP_DIR/.pre-atomic"
+    for entry in "$DEPLOY_APP_DIR"/* "$DEPLOY_APP_DIR"/.git "$DEPLOY_APP_DIR"/.venv; do
+        [ -e "$entry" ] || continue
+        base="$(basename "$entry")"
+        case "$base" in
+            repo|releases|current|.pre-atomic) continue ;;   # new-layout entries — keep
+        esac
+        mv "$entry" "$DEPLOY_APP_DIR/.pre-atomic/" 2>/dev/null || true
+    done
+    warn "old checkout moved to $DEPLOY_APP_DIR/.pre-atomic — remove it once the new deploy is verified"
 fi
+
+# --- 4. Source mirror ----------------------------------------------------------------
+# The root-owned git mirror deploy.sh archives releases from. update_mirror clones it if
+# absent; do it here so bootstrap's own delegated deploy.sh run has it ready.
+update_mirror
+
+# Templates are read from the running scripts' own repo ($REPO_DIR), NOT from $DEPLOY_APP_DIR
+# (which is now the root-owned atomic base with no top-level checkout). Run bootstrap from a
+# clone of the repo.
+TPL="$REPO_DIR/deploy"
 
 # --- 5. Runtime env file (install once; never clobber live secrets) ------------------
 if [ ! -f "$DEPLOY_ENV_FILE" ]; then
     log "installing runtime env file -> $DEPLOY_ENV_FILE"
     install -o root -g "$DEPLOY_GROUP" -m 0640 \
-        "$DEPLOY_APP_DIR/deploy/upstreamwx.env.example" "$DEPLOY_ENV_FILE"
+        "$TPL/upstreamwx.env.example" "$DEPLOY_ENV_FILE"
     warn "edit $DEPLOY_ENV_FILE — set NWS contact and (optional) ANTHROPIC_API_KEY"
 else
     ok "env file exists at $DEPLOY_ENV_FILE (left untouched)"
 fi
 
-# --- 6. systemd unit + nginx site (rendered from templates) --------------------------
-log "installing systemd unit and nginx site"
-render_template "$DEPLOY_APP_DIR/deploy/systemd/upstreamwx-api.service" \
+# --- 6. systemd unit + nginx sites (rendered from templates) -------------------------
+log "installing systemd unit and nginx sites"
+render_template "$TPL/systemd/upstreamwx-api.service" \
                 "/etc/systemd/system/${DEPLOY_SERVICE}.service"
 
 # Private journald namespace for the API (LogNamespace=upstreamwx in the unit) so its logs
 # prune to ~10 days independently of the system journal (deploy/systemd/journald@upstreamwx.conf).
 install -o root -g root -m 0644 \
-    "$DEPLOY_APP_DIR/deploy/systemd/journald@upstreamwx.conf" \
+    "$TPL/systemd/journald@upstreamwx.conf" \
     /etc/systemd/journald@upstreamwx.conf
-# Pick up the retention config now (and on re-runs). The namespaced journald is a template
-# instance started on demand when the app logs; restart applies the conf, starting it if
-# needed. Best-effort — the app's first start would bring it up regardless.
 systemctl restart systemd-journald@upstreamwx 2>/dev/null || true
 
-# Name the site after the service so a second environment (e.g. staging) installs its
-# own site instead of clobbering production's (docs/deployment-workflow.md). The landing
-# site (apex) installs as a SECOND site, only when DEPLOY_LANDING_SERVER_NAME is set — a
-# tailnet-only staging box leaves it empty and gets just the app site.
+# Name the site after the service so a second environment (e.g. staging) installs its own
+# site instead of clobbering production's. render_nginx_site (SA-09) resolves the TLS
+# conditional regions from DEPLOY_TLS_ENABLE. The landing + default-server sites install only
+# where they make sense.
 install_nginx_site() {
     # install_nginx_site TEMPLATE SITE_NAME
     local template="$1" name="$2"
     if [ -d /etc/nginx/sites-available ]; then
-        render_template "$template" "/etc/nginx/sites-available/${name}.conf"
+        render_nginx_site "$template" "/etc/nginx/sites-available/${name}.conf"
         ln -sf "/etc/nginx/sites-available/${name}.conf" \
                "/etc/nginx/sites-enabled/${name}.conf"
     else
         # Amazon Linux / RHEL nginx uses conf.d, not sites-available.
-        render_template "$template" "/etc/nginx/conf.d/${name}.conf"
+        render_nginx_site "$template" "/etc/nginx/conf.d/${name}.conf"
     fi
 }
 
-install_nginx_site "$DEPLOY_APP_DIR/deploy/nginx/upstreamwx.conf" "$DEPLOY_SERVICE"
+install_nginx_site "$TPL/nginx/upstreamwx.conf" "$DEPLOY_SERVICE"
+# Default server: drop unknown Hosts at the edge with 444 (SA-09). Only the PUBLIC app box
+# installs it (it claims listen ...default_server); a tailnet-only staging box skips it so it
+# doesn't shadow another service's default vhost.
 if [ -n "${DEPLOY_LANDING_SERVER_NAME:-}" ]; then
-    install_nginx_site "$DEPLOY_APP_DIR/deploy/nginx/landing.conf" "${DEPLOY_SERVICE}-landing"
-    ok "landing site enabled for: $DEPLOY_LANDING_SERVER_NAME"
+    install_nginx_site "$TPL/nginx/default-server.conf" "${DEPLOY_SERVICE}-default"
+    install_nginx_site "$TPL/nginx/landing.conf" "${DEPLOY_SERVICE}-landing"
+    ok "landing + default-server sites enabled for: $DEPLOY_LANDING_SERVER_NAME"
 else
-    warn "DEPLOY_LANDING_SERVER_NAME empty — skipping the apex landing site"
+    warn "DEPLOY_LANDING_SERVER_NAME empty — skipping the apex landing + default-server sites"
 fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 if nginx -t >/dev/null 2>&1; then
     systemctl enable --now nginx >/dev/null 2>&1 || true
     systemctl reload nginx
-    ok "nginx configured"
+    ok "nginx configured (TLS ${DEPLOY_TLS_ENABLE:-0})"
 else
     warn "nginx -t failed — review the site config before reloading nginx"
 fi
 
-# --- 7. Build venv, install app, start the service (delegated to deploy.sh) ----------
-log "running deploy.sh for the initial build + service start"
-"$DEPLOY_APP_DIR/deploy/deploy.sh" "$DEPLOY_BRANCH"
+# --- 6b. TLS via certbot --webroot (SA-09) -------------------------------------------
+# Issue/renew a multi-SAN cert WITHOUT letting certbot rewrite nginx (--webroot, not --nginx),
+# then re-render the sites with the version-controlled :443 block (DEPLOY_TLS_ENABLE=1). Runs
+# only when an email is configured and the cert isn't already present. Renewal is certbot's
+# own systemd timer; we add a reload deploy-hook so nginx picks up renewed certs.
+setup_tls_webroot() {
+    [ -n "${DEPLOY_CERTBOT_EMAIL:-}" ] || { warn "DEPLOY_CERTBOT_EMAIL empty — skipping certbot (add TLS later, see deploy/README.md)"; return 0; }
+    command -v certbot >/dev/null 2>&1 || {
+        log "installing certbot"
+        if command -v apt-get >/dev/null 2>&1; then
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq certbot || { warn "certbot install failed — skipping TLS"; return 0; }
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y certbot >/dev/null 2>&1 || { warn "certbot install failed — skipping TLS"; return 0; }
+        else
+            warn "no apt/dnf — install certbot manually"; return 0
+        fi
+    }
+    # Build the -d list: app name(s) + landing name(s).
+    local d_args=() name
+    for name in $DEPLOY_APP_SERVER_NAME $DEPLOY_LANDING_SERVER_NAME; do
+        d_args+=(-d "$name")
+    done
+    local primary="${DEPLOY_APP_SERVER_NAME%% *}"
+    if [ -f "/etc/letsencrypt/live/${primary}/fullchain.pem" ]; then
+        ok "cert already present for ${primary}"
+    else
+        log "issuing cert via certbot --webroot for: $DEPLOY_APP_SERVER_NAME $DEPLOY_LANDING_SERVER_NAME"
+        certbot certonly --webroot -w "$DEPLOY_ACME_WEBROOT" "${d_args[@]}" \
+            --email "$DEPLOY_CERTBOT_EMAIL" --agree-tos --non-interactive --keep-until-expiring \
+            --deploy-hook "systemctl reload nginx" \
+            || { warn "certbot issuance failed — leaving the site HTTP-only; fix DNS/ports and re-run bootstrap"; return 0; }
+        ok "certificate issued for ${primary}"
+    fi
+    # Re-render the sites WITH the :443 block now that the cert exists.
+    DEPLOY_TLS_ENABLE=1
+    install_nginx_site "$TPL/nginx/upstreamwx.conf" "$DEPLOY_SERVICE"
+    install_nginx_site "$TPL/nginx/default-server.conf" "${DEPLOY_SERVICE}-default"
+    install_nginx_site "$TPL/nginx/landing.conf" "${DEPLOY_SERVICE}-landing"
+    if nginx -t >/dev/null 2>&1; then
+        systemctl reload nginx
+        ok "nginx now serving HTTPS (:443 under version control, SA-09)"
+    else
+        warn "nginx -t failed after enabling TLS — review the :443 config"
+    fi
+}
+# Only attempt TLS on a public box (landing names set imply real DNS). Tailnet staging keeps
+# TLS via `tailscale serve` and skips certbot.
+if [ -n "${DEPLOY_LANDING_SERVER_NAME:-}" ]; then
+    setup_tls_webroot
+fi
+
+# --- 7. Build the first release + start the service (delegated to deploy.sh) ----------
+log "running deploy.sh for the initial release build + service start"
+"$DEPLOY_DIR/deploy.sh" "$DEPLOY_BRANCH"
 
 cat <<EOF
 
@@ -191,6 +263,10 @@ $(ok "bootstrap complete")
 Next steps:
   1. Edit secrets/contact:   sudo nano $DEPLOY_ENV_FILE
                              sudo systemctl restart $DEPLOY_SERVICE
-  2. Add TLS (recommended):  sudo certbot --nginx -d $DEPLOY_APP_SERVER_NAME${DEPLOY_LANDING_SERVER_NAME:+ $(printf -- '-d %s ' $DEPLOY_LANDING_SERVER_NAME)}
-  3. Verify:                 curl -s http://127.0.0.1:$DEPLOY_BIND_PORT/v1/health
+  2. TLS:                    handled by certbot --webroot above when DEPLOY_CERTBOT_EMAIL is
+                             set (SA-09); otherwise add it later and re-run bootstrap.
+  3. Public activation:      set UPSTREAMWX_SESSION_SECRET + UPSTREAMWX_API_TRUSTED_HOSTS +
+                             UPSTREAMWX_API_AUTH_REQUIRED=1 in $DEPLOY_ENV_FILE, and
+                             DEPLOY_REQUIRE_HTTPS=1 + DEPLOY_VERIFY_TAG_SIGNATURE=1 in config.env.
+  4. Verify:                 curl -s http://127.0.0.1:$DEPLOY_BIND_PORT/v1/health
 EOF

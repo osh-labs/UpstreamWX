@@ -2,13 +2,19 @@
 #
 # Template: bootstrap.sh renders the __TOKENS__ from deploy/config.env and installs the
 # result to /etc/systemd/system/upstreamwx-api.service. Runs ONE uvicorn process: the
-# app's lifespan starts the in-process SREF-cycle refresh scheduler (api/app.py), which
-# is a singleton — do NOT add workers, that would multiply the refresh passes (FR-12).
+# app's lifespan starts the in-process GEFS/REFS-cycle refresh scheduler (api/app.py),
+# which is a singleton — do NOT add workers, that would multiply the refresh passes (FR-12).
 #
 # uvicorn binds loopback only; nginx terminates TLS and proxies to it (see deploy/nginx).
+#
+# SA-06 (atomic releases): the service runs out of __APP_DIR__/current, a symlink deploy.sh
+# flips atomically to the newly-built root-owned release under __APP_DIR__/releases/<sha>.
+# The release tree (source + .venv + browser) is root-owned and read-only to this service
+# account, so the runtime user can no longer influence what a later root deploy executes.
+# Rollback re-points the symlink and restarts — restoring source, deps, and browser together.
 
 [Unit]
-Description=UpstreamWX briefing API (FastAPI + SREF-cycle refresh scheduler)
+Description=UpstreamWX briefing API (FastAPI + GEFS/REFS-cycle refresh scheduler)
 Documentation=https://github.com/osh-labs/upstreamwx/blob/main/deploy/README.md
 After=network-online.target
 Wants=network-online.target
@@ -17,12 +23,15 @@ Wants=network-online.target
 Type=simple
 User=__USER__
 Group=__GROUP__
-WorkingDirectory=__APP_DIR__
+# Run from the atomic-release symlink, not the base dir. systemd resolves the symlink at
+# start, so a `current` flip + restart cleanly moves the service to the new release.
+WorkingDirectory=__APP_DIR__/current
 EnvironmentFile=__ENV_FILE__
-# Playwright's headless Chromium binary location (server-side PDF export, FR-27).
-# deploy.sh installs the binary here via `playwright install chromium`.
-Environment=PLAYWRIGHT_BROWSERS_PATH=__APP_DIR__/.playwright-browsers
-ExecStart=__APP_DIR__/.venv/bin/uvicorn upstreamwx.api.app:app --host __BIND_HOST__ --port __BIND_PORT__
+# Playwright's headless Chromium binary location (server-side PDF export, FR-27). deploy.sh
+# installs the browser INTO the release (__APP_DIR__/current/.playwright-browsers) so a
+# rollback restores the browser that matches that release's Playwright.
+Environment=PLAYWRIGHT_BROWSERS_PATH=__APP_DIR__/current/.playwright-browsers
+ExecStart=__APP_DIR__/current/.venv/bin/uvicorn upstreamwx.api.app:app --host __BIND_HOST__ --port __BIND_PORT__
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
@@ -37,15 +46,28 @@ KillSignal=SIGTERM
 TimeoutStopSec=30
 
 # --- Hardening: this process only needs its code (ro) and its data dir (rw) ----------
+# The release tree under __APP_DIR__ is root-owned and read-only to this account, so it is
+# NOT listed as writable. Only the runtime cache/data dir is writable.
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=__DATA_DIR__ __APP_DIR__/.playwright-browsers
+ReadWritePaths=__DATA_DIR__
 ProtectKernelTunables=true
 ProtectControlGroups=true
 RestrictSUIDSGID=true
-RestrictNamespaces=true
+# SA-08: restore Chromium's native renderer sandbox for server-side PDF export. The
+# unprivileged Chromium sandbox builds itself from an unprivileged USER namespace and then
+# nests MOUNT/PID/NET namespaces inside it, so those four types must be creatable. We allow
+# exactly that set (everything else — ipc/uts/cgroup — stays denied). pdf.py drops
+# --no-sandbox when it runs as the non-root service user, so the browser uses this sandbox.
+#   Host prerequisites (validate on the box, see deploy/README.md):
+#     * unprivileged user namespaces enabled (sysctl user.max_user_namespaces > 0);
+#     * on Ubuntu 24.04+, kernel.apparmor_restrict_unprivileged_userns=0 (or an AppArmor
+#       profile permitting it) so the userns clone isn't blocked by AppArmor.
+#   If the box cannot allow user namespaces, set UPSTREAMWX_PDF_NO_SANDBOX=1 in the env file
+#   to fall back to --no-sandbox (the pre-SA-08 behaviour) rather than a failing renderer.
+RestrictNamespaces=user mnt pid net
 LockPersonality=true
 
 [Install]

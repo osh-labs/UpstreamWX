@@ -64,21 +64,33 @@ git push origin v0.5.0
 sudo deploy/deploy.sh v0.5.0
 ```
 
-`deploy.sh` fetches the ref, rebuilds the venv, restarts the service, and **blocks on
-`/v1/health`** — a bad deploy fails loudly instead of half-landing. It also stamps the
-deployed release into `frontend/version.json` (git-ignored), which `/v1/health` echoes
-back and the PWA uses to nudge stale clients to reload.
+`deploy.sh` builds the ref into a fresh **root-owned release** (`<app_dir>/releases/<sha>`,
+its own `uv sync --frozen` venv + Chromium), atomically flips the `<app_dir>/current`
+symlink, restarts, and **blocks on `/v1/health`** — a bad deploy fails loudly instead of
+half-landing. It stamps the release into `frontend/version.json` (git-ignored), which
+`/v1/health` echoes and the PWA uses to nudge stale clients to reload (SA-06, issue #132).
+
+On a public prod config, `deploy.sh` also verifies the tag's GPG signature before building it
+(`DEPLOY_VERIFY_TAG_SIGNATURE=1`, SA-07) and refuses to complete without live HTTPS +
+redirect (`DEPLOY_REQUIRE_HTTPS=1`, SA-09).
 
 ### Rollback
 
-Because every release is a tag, reverting is just deploying the previous one:
+Two ways, both cheap because releases are immutable and kept on disk:
 
-```sh
-sudo deploy/deploy.sh v0.4.9
-```
+- **Automatic.** If a new release fails the post-deploy `/v1/health` check, `deploy.sh` flips
+  `current` back to the previous release and restarts — no manual step. The failed deploy
+  ends with a clear "ROLLED BACK to …" message.
+- **Manual.** Re-deploy the previous tag; it reuses the already-built release dir (fast) and
+  re-flips the symlink:
+
+  ```sh
+  sudo deploy/deploy.sh v0.4.9
+  ```
 
 Confirm the running version any time with `curl -s localhost:8000/v1/health` (the
-`release` field).
+`release` field) or `readlink <app_dir>/current`. `DEPLOY_KEEP_RELEASES` (default 5) old
+releases are retained for rollback; the active one is never pruned.
 
 ## PWA / client-update notes
 

@@ -76,21 +76,26 @@ nano deploy/config.env          # optional: override DEPLOY_BRANCH, server names
 sudo deploy/bootstrap.sh
 ```
 
-`bootstrap.sh` clones the repo into `/opt/upstreamwx` (the permanent location — the
-`/tmp` copy was just to get these scripts), then hands off to `deploy.sh` to build the
-venv and start the service. It is idempotent; re-run it any time.
+`bootstrap.sh` sets up the **atomic-release layout** under `/opt/upstreamwx` (SA-06): a
+root-owned git **mirror** (`repo/`), a **`releases/`** dir, and the **`current`** symlink the
+service runs from. It then hands off to `deploy.sh`, which builds the first release
+(`releases/<sha>` with its own root-owned `uv sync --frozen` venv + Chromium) and flips
+`current` to it. Run bootstrap **from the `/tmp` clone** (the base dir is no longer itself a
+checkout — templates are read from wherever the scripts live). It is idempotent; re-run any
+time. If an older in-place checkout is present it is migrated aside to
+`/opt/upstreamwx/.pre-atomic` once (remove it after verifying the new deploy).
 
-Then finish the two manual steps it prints:
+Then finish the manual steps it prints:
 
 ```sh
 # 1. Secrets + NWS contact (required: NWS rejects requests without a real UA — FR-5).
 sudo nano /etc/upstreamwx/upstreamwx.env       # set NWS contact; add ANTHROPIC_API_KEY
 sudo systemctl restart upstreamwx-api
 
-# 2. TLS (strongly recommended). One multi-SAN cert covers the app + landing names;
-#    certbot rewrites both nginx sites in place.
-sudo apt-get install -y certbot python3-certbot-nginx
-sudo certbot --nginx -d app.upstreamwx.com -d upstreamwx.com -d www.upstreamwx.com
+# 2. TLS is scripted (SA-09): set DEPLOY_CERTBOT_EMAIL in deploy/config.env and bootstrap
+#    issues a multi-SAN cert via `certbot --webroot` (NO nginx rewrite — the :443 block is
+#    version-controlled) and re-renders the sites with HTTPS. The ACME challenge stays on :80
+#    for auto-renewal. To add TLS after the fact, set the email and re-run bootstrap.
 ```
 
 Verify:
@@ -106,20 +111,51 @@ cache are live.
 
 ---
 
+## Host hardening (issue #132 — public-beta activation)
+
+These are scripted into `bootstrap.sh`/`deploy.sh`; set the gates on the **public prod**
+`config.env` (leave off on tailnet staging), then validate on staging first.
+
+- **Access gate + Host allowlist (SA-01/SA-09).** In `/etc/upstreamwx/upstreamwx.env` set
+  `UPSTREAMWX_SESSION_SECRET`, `UPSTREAMWX_API_AUTH_REQUIRED=1`, and
+  `UPSTREAMWX_API_TRUSTED_HOSTS=["app.upstreamwx.com"]`. In `config.env` set
+  `DEPLOY_REQUIRE_HTTPS=1`. `deploy.sh` then fails a public deploy without live HTTPS +
+  redirect and warns if `/v1/health` shows `auth_active`/`trusted_hosts` off.
+- **Signed release tags (SA-07).** Set `DEPLOY_VERIFY_TAG_SIGNATURE=1` in `config.env` and
+  import the signer's public key into **root's** GPG keyring; unsigned/tampered tags are
+  refused at build time. Tag releases with `git tag -s`.
+- **uv installer checksum (SA-06).** Pin `UV_INSTALLER_SHA256` in `config.env`
+  (`curl -LsSf https://astral.sh/uv/$UV_VERSION/install.sh | sha256sum` on a trusted machine).
+- **PDF renderer sandbox (SA-08).** The unit permits the user namespaces Chromium's sandbox
+  needs (`RestrictNamespaces=user mnt pid net`) and `pdf.py` drops `--no-sandbox` for the
+  non-root service. This requires the host to allow **unprivileged user namespaces**:
+  ```sh
+  sysctl user.max_user_namespaces        # must be > 0
+  # Ubuntu 24.04+ also gates userns behind AppArmor:
+  sysctl kernel.apparmor_restrict_unprivileged_userns   # want 0, or add an AppArmor profile
+  ```
+  Verify a real PDF render after deploy (`POST /v1/briefing/pdf`). If the host cannot allow
+  user namespaces, set `UPSTREAMWX_PDF_NO_SANDBOX=1` in the env file to fall back.
+- **Rollback** is automatic on a failed health check (the symlink flips back); manually,
+  re-deploy the previous tag. `DEPLOY_KEEP_RELEASES` releases are retained.
+
+---
+
 ## Routine deploys (every release)
 
-The server already has everything; a deploy just moves it to a new git ref and restarts.
-SSH in and run `deploy.sh` (it lives in the checkout from the first install):
+The server already has everything; a deploy builds the new ref into a fresh release and
+flips to it. SSH in and run `deploy.sh` from the active release (or any clone of the repo):
 
 ```sh
-sudo /opt/upstreamwx/deploy/deploy.sh main        # or any branch / tag / commit SHA
+sudo /opt/upstreamwx/current/deploy/deploy.sh main   # or any branch / tag / commit SHA
 ```
 
-`deploy.sh` fetches the ref as the service user, refreshes the venv (`uv pip install
--e .`), restarts the service, and **blocks on `/v1/health`** — a deploy that doesn't
-come up healthy exits non-zero and dumps the last 40 journal lines, so it fails loudly.
-It also stamps the deployed release into `frontend/version.json` (git-ignored), which
-`/v1/health` echoes back as `release` and the PWA polls to nudge stale clients to reload.
+`deploy.sh` builds the ref into a root-owned `releases/<sha>` (clean export + its own
+`uv sync --frozen` venv + Chromium), atomically flips the `current` symlink, restarts, and
+**blocks on `/v1/health`** — a release that doesn't come up healthy is **rolled back**
+automatically (the symlink flips to the previous release) and the deploy exits non-zero with
+the last 40 journal lines. It stamps the release into `frontend/version.json` (git-ignored),
+which `/v1/health` echoes as `release` and the PWA polls to nudge stale clients to reload.
 
 **Production deploys a tag, not a branch.** A tag is immutable, so "what's in prod" is a
 fixed, knowable thing and rollback is just deploying the previous tag. Deploying a moving
