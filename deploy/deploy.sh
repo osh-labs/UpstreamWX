@@ -60,10 +60,11 @@ if [ -f "$DEPLOY_ENV_FILE" ]; then
         [[ "$_line" =~ ^UPSTREAMWX_ ]] && _uwx_env+=("$_line")
     done < "$DEPLOY_ENV_FILE"
 fi
-# Always ensure the data dir is set; default to the deploy layout if the env file omits it.
-if ! printf '%s\n' "${_uwx_env[@]+"${_uwx_env[@]}"}" | grep -q '^UPSTREAMWX_DATA_DIR='; then
-    _uwx_env+=("UPSTREAMWX_DATA_DIR=$DEPLOY_DATA_DIR")
-fi
+# Force the data dir to the deploy layout, appended LAST so it OVERRIDES any UPSTREAMWX_DATA_DIR
+# in the env file (env applies last-wins). This keeps the warm writing to the exact dir the
+# service uses (systemd pins the same value) — a wrong path in the env file otherwise sends the
+# warm to a dir the service account can't write (PermissionError).
+_uwx_env+=("UPSTREAMWX_DATA_DIR=$DEPLOY_DATA_DIR")
 
 # --- REFS production-feed cutover gate ------------------------------------------------
 # REFS production (NOMADS com/refs/prod, ensprod NEP) goes live 2026-08-31 12Z and the AWS
