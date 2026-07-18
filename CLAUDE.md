@@ -470,10 +470,24 @@ the handler's `await request.body()`; (2) every broad `BriefingResponse` field c
 above real server output (the frozen contract still validates) so a hostile payload's list cardinality and
 string sizes are bounded and an over-cap field is a bounded 422, not a 500/render; (3) safe headless-hardening
 Chromium flags (`--disable-gpu/-extensions/-background-networking/-sync`) trim the render's surface (verified
-end-to-end). **Deferred to the host pass (issue #132):** restoring Chromium's native sandbox (relax the systemd
-`RestrictNamespaces` + drop `--no-sandbox`, or isolate rendering in a separate container) — flipping it blind
-risks the renderer failing to launch. Disabling JS for the template is not feasible (it renders via
-`window.__BRIEFING__`). Full offline suite green (500).
+end-to-end). Chromium's native sandbox was **restored in the issue #132 host pass** (below). Disabling JS for
+the template is not feasible (it renders via `window.__BRIEFING__`). Full offline suite green (500).
+
+**Host-only deploy hardening scripted into the deploy layer (issue #132 — SA-06/07/08/09, 2026-07-18).** The
+live-host residuals from the 2026-07-14 audit are now scripted into `deploy/` so staging and prod get them
+identically and reproducibly (changelog `docs/changelog-2026-07-18-issue-132-host-hardening.md`). Engine output
+unchanged (NFR-4); the only product-code change is `sitrep/pdf.py`. **SA-06 (atomic releases):** `deploy.sh`
+builds each ref into a root-owned `releases/<sha>` (clean export + its own `uv sync --frozen` venv + per-release
+Chromium), atomically flips the `<app_dir>/current` symlink the service runs from, and **rolls the symlink back**
+on a failed `/v1/health` — the release tree is read-only to the runtime account, closing the last "runtime user
+influences what root runs" surface; the shared build/activate/prune engine lives in `deploy/_lib.sh`, and
+`bootstrap.sh` migrates an old in-place checkout aside. uv installer is checksum-verified + version-asserted; the
+Chromium revision is stamped into `version.json`. **SA-09:** the nginx `:443` block + HTTP→HTTPS redirect are
+version-controlled (marker regions toggled by `DEPLOY_TLS_ENABLE`), `certbot --webroot` issues/renews (no nginx
+rewrite), and a default server returns `444` for unknown Hosts. **SA-08:** the unit relaxes `RestrictNamespaces`
+to `user mnt pid net` and `pdf.py` drops `--no-sandbox` for the non-root service (re-added as root, or via
+`UPSTREAMWX_PDF_NO_SANDBOX`). **SA-07:** signed-tag verification at deploy, CI actions SHA-pinned, and a new CI
+`supply-chain` job (pip-audit + detect-secrets + CycloneDX SBOM). PR #137.
 
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
