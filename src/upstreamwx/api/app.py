@@ -250,25 +250,28 @@ def _charge_cost(kind: str, principal: Principal) -> None:
 
 
 # -----------------------------------------------------------------------------------------
-# Application-level request-body cap for the JSON mission endpoints (SA-02).
+# Application-level request-body cap for the JSON mission endpoints (SA-02) and the PDF
+# endpoint (SA-08).
 #
 # nginx caps the deployed edge (client_max_body_size), but the standalone uvicorn entry point
 # has no edge and an edge config can drift, so the app enforces its own bound. A real
 # MissionSpec is a few KB even with a full inputs vector; anything larger is an abuse payload.
 # Pure-ASGI so the body is rejected BEFORE FastAPI parses the typed model: the Content-Length
 # header is prechecked (cheap, present on normal requests) and the streamed body is counted
-# (authoritative for chunked uploads that omit Content-Length). The PDF endpoint keeps its own
-# larger 2 MiB cap and is deliberately excluded here.
+# (authoritative for chunked uploads that omit Content-Length). The PDF endpoint (SA-08) is
+# folded in with its own larger 2 MiB cap so a chunked payload is stream-rejected here too,
+# rather than fully buffered by ``await request.body()`` in the handler before the size check.
+# The per-path cap is looked up from a map so each endpoint keeps its own bound.
 # -----------------------------------------------------------------------------------------
-_BODY_LIMITED_PATHS = frozenset({"/v1/briefing", "/v1/briefing/frame", "/v1/watershed/warm"})
+_JSON_BODY_PATHS = frozenset({"/v1/briefing", "/v1/briefing/frame", "/v1/watershed/warm"})
 
 
 class _MaxBodySizeMiddleware:
-    """Reject oversized request bodies on the mission endpoints before parsing (SA-02, 413)."""
+    """Reject oversized request bodies before parsing, per-path (SA-02 / SA-08, 413)."""
 
-    def __init__(self, app: object, *, max_bytes: int) -> None:
+    def __init__(self, app: object, *, limits: dict[str, int]) -> None:
         self.app = app
-        self._max_bytes = max_bytes
+        self._limits = dict(limits)
 
     async def _reject(self, send) -> None:
         await send(
@@ -281,16 +284,16 @@ class _MaxBodySizeMiddleware:
         await send({"type": "http.response.body", "body": b'{"detail":"Request body too large."}'})
 
     async def __call__(self, scope, receive, send) -> None:
-        if scope["type"] != "http" or scope.get("path") not in _BODY_LIMITED_PATHS:
+        max_bytes = self._limits.get(scope.get("path")) if scope["type"] == "http" else None
+        if max_bytes is None:
             return await self.app(scope, receive, send)
         # Cheap Content-Length precheck (absent on chunked uploads).
         for name, value in scope.get("headers") or ():
-            if name == b"content-length" and value.isdigit() and int(value.decode()) > (
-                self._max_bytes
-            ):
+            if name == b"content-length" and value.isdigit() and int(value.decode()) > max_bytes:
                 return await self._reject(send)
-        # Authoritative check: buffer the body up to the cap, then replay it downstream. The cap
-        # is tiny (KB), so full buffering is trivial; a body that grows past it is rejected.
+        # Authoritative check: buffer the body up to the cap, then replay it downstream. A body
+        # that grows past the cap is rejected mid-stream (never fully buffered), so a chunked
+        # upload that omits Content-Length can't exhaust memory before the size check.
         body = b""
         more = True
         while more:
@@ -299,7 +302,7 @@ class _MaxBodySizeMiddleware:
                 break
             body += message.get("body", b"")
             more = message.get("more_body", False)
-            if len(body) > self._max_bytes:
+            if len(body) > max_bytes:
                 return await self._reject(send)
 
         replayed = False
@@ -464,8 +467,12 @@ app = FastAPI(
 )
 # Middleware runs outermost-first in reverse registration order: the session gate (added last)
 # runs before the body cap, so an unauthenticated request is denied before its body is buffered.
-# Reject oversized mission-endpoint bodies before the handlers parse them (SA-02).
-app.add_middleware(_MaxBodySizeMiddleware, max_bytes=get_settings().api_max_request_bytes)
+# Reject oversized bodies before the handlers parse them: the JSON mission endpoints at the small
+# per-request cap (SA-02), the PDF endpoint at its larger 2 MiB cap with the same streaming reject
+# (SA-08 — a chunked payload can't buffer unbounded before the handler's size check).
+_body_limits = {p: get_settings().api_max_request_bytes for p in _JSON_BODY_PATHS}
+_body_limits["/v1/briefing/pdf"] = _PDF_MAX_BODY_BYTES
+app.add_middleware(_MaxBodySizeMiddleware, limits=_body_limits)
 # Deny unauthenticated requests to gated /v1 endpoints when the access gate is on (SA-01).
 app.add_middleware(_SessionMiddleware)
 # Reject requests with an unexpected Host header when a public host configures it (SA-09).

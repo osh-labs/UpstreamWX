@@ -414,21 +414,34 @@ class BriefingResponse(BaseModel):
     carrying HTML where the template expects a number or clock window.
     """
 
-    markdown: str
-    overall_posture: str
-    overall_confidence: str
-    threshold_version: str
+    # SA-08: the PDF endpoint accepts this schema from a client and renders it in headless
+    # Chromium, so every broad field carries a generous cap — orders of magnitude above any
+    # legitimate server-built briefing (cf. sample-briefing.json: markdown ~2.5 KB, every list
+    # <= 6) yet bounding a hostile payload's list cardinality and string sizes. Deeply nested
+    # arbitrary dicts (watershed/roc/laoc GeoJSON, the *_series value lists) are bounded by the
+    # endpoint's 2 MiB streaming body cap rather than per-field.
+    markdown: str = Field(max_length=262_144)
+    overall_posture: str = Field(max_length=32)
+    overall_confidence: str = Field(max_length=32)
+    # A semicolon-join of every threshold-config version (5 today, ~76 chars); generous headroom.
+    threshold_version: str = Field(max_length=256)
     generated_at: datetime
     framed: bool
     cached: bool = Field(description="True if served from cache without regenerating")
     cache_cycle: str = Field(
-        description="GEFS/REFS cycle token this briefing is current for (newest available run)"
+        max_length=64,
+        description="GEFS/REFS cycle token this briefing is current for (newest available run)",
     )
     degraded: bool = Field(description="True if a non-mandatory source was unavailable (NFR-6)")
-    sources_ok: dict[str, bool] = Field(default_factory=dict)
-    warnings: list[str] = Field(default_factory=list)
+    sources_ok: dict[Annotated[str, Field(max_length=64)], bool] = Field(
+        default_factory=dict, max_length=64
+    )
+    warnings: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list, max_length=64
+    )
     data_quality: dict = Field(
         default_factory=dict,
+        max_length=64,
         description=(
             "First-class availability/provenance: data gaps affecting this briefing plus the "
             "model cycles actually used (NFR-6). Display-only; never re-read by the engine."
@@ -444,17 +457,17 @@ class BriefingResponse(BaseModel):
     laoc: dict | None = Field(
         default=None, description="Lightning-Area-of-Concern ring; null = upstream domain"
     )
-    summary: str | None = None
-    bluf: list[BlufEntry] = Field(default_factory=list)
-    metrics: list[dict] = Field(default_factory=list)
-    phases: list[PhaseCard] = Field(default_factory=list)
-    timeline: list[dict] = Field(default_factory=list)
-    hazard_detail: list[dict] = Field(default_factory=list)
+    summary: str | None = Field(default=None, max_length=4000)
+    bluf: list[BlufEntry] = Field(default_factory=list, max_length=16)
+    metrics: list[dict] = Field(default_factory=list, max_length=64)
+    phases: list[PhaseCard] = Field(default_factory=list, max_length=16)
+    timeline: list[dict] = Field(default_factory=list, max_length=256)
+    hazard_detail: list[dict] = Field(default_factory=list, max_length=64)
     forecast_hourly: ForecastTable = Field(default_factory=ForecastTable)
-    temp_series: dict = Field(default_factory=dict)
-    wind_series: dict = Field(default_factory=dict)
+    temp_series: dict = Field(default_factory=dict, max_length=64)
+    wind_series: dict = Field(default_factory=dict, max_length=64)
     risk_inputs: RiskInputsView = Field(
         default_factory=RiskInputsView,
         description="scalar engine inputs for the Forecast view (FR-20)",
     )
-    resources: list[dict] = Field(default_factory=list)
+    resources: list[dict] = Field(default_factory=list, max_length=64)
