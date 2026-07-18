@@ -460,6 +460,21 @@ redacted (`scheme://host/<redacted>` + exception type only, no `exc_info`) so th
 reach the journal. New settings echoed on `/v1/health`; documented in the deploy env examples. Full offline
 suite green (486). PR A (SA-05 CDN/CSP) is handed off separately and also edits nginx — coordinate the overlap.
 
+**PDF/Chromium render containment (SA-08, 2026-07-18).** Hardened the `/v1/briefing/pdf` surface, which
+renders client-supplied `BriefingResponse` JSON in headless Chromium (workplan `docs/sa-08-hardening-workplan.md`;
+changelog `docs/changelog-2026-07-18-sa-08.md`). Engine output unchanged (NFR-4). Three parts: (1) the
+`_MaxBodySizeMiddleware` now takes a **per-path cap map** and folds in `/v1/briefing/pdf` at its 2 MiB cap, so
+a chunked upload without `Content-Length` is **stream-rejected** (413) mid-body instead of fully buffered by
+the handler's `await request.body()`; (2) every broad `BriefingResponse` field carries a **generous** cap
+(`markdown` ≤ 256 KiB, lists ≤ 16–256, `sources_ok`/`*_series` cardinality ≤ 64, …) — orders of magnitude
+above real server output (the frozen contract still validates) so a hostile payload's list cardinality and
+string sizes are bounded and an over-cap field is a bounded 422, not a 500/render; (3) safe headless-hardening
+Chromium flags (`--disable-gpu/-extensions/-background-networking/-sync`) trim the render's surface (verified
+end-to-end). **Deferred to the host pass (issue #132):** restoring Chromium's native sandbox (relax the systemd
+`RestrictNamespaces` + drop `--no-sandbox`, or isolate rendering in a separate container) — flipping it blind
+risks the renderer failing to launch. Disabling JS for the template is not feasible (it renders via
+`window.__BRIEFING__`). Full offline suite green (500).
+
 **Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
 **Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
 (`BriefingResponse.markdown`) as formatted HTML using a zero-dependency in-browser converter
