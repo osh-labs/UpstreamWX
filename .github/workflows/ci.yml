@@ -76,14 +76,19 @@ jobs:
         run: uvx pip-audit --requirement requirements.locked.txt
 
       - name: Secret scan (detect-secrets)
-        # Fail if any high-signal secret is committed. Committed test fixtures (GRIB2 subsets,
-        # golden JSON) are excluded to avoid entropy false positives — .env is git-ignored and
-        # never in the tree, so a hit here is a real leak.
+        # Fail if any high-signal secret is committed to the real risk surface (src/, deploy/,
+        # frontend/, config, docs). Excluded to avoid deliberate/incidental false positives:
+        #   - tests/     : auth tests carry FAKE HMAC secrets/tokens by design (SA-01)
+        #   - .git/, .venv/ : VCS internals + a local venv are high-entropy, not source
+        #   - *.grib2, uv.lock : committed binary fixtures + hashes, not secrets
+        # .env is git-ignored and never in the tree, so a hit outside these is a real leak.
         run: |
           uvx detect-secrets scan --all-files \
-            --exclude-files 'tests/fixtures/.*' \
+            --exclude-files '^\.git/' \
+            --exclude-files '^\.venv/' \
+            --exclude-files '^tests/' \
             --exclude-files '.*\.grib2$' \
-            --exclude-files 'uv\.lock$' > detect-secrets.report.json
+            --exclude-files '^uv\.lock$' > detect-secrets.report.json
           python - <<'PY'
           import json, sys
           report = json.load(open("detect-secrets.report.json"))
