@@ -141,9 +141,21 @@ async def render_pdf(briefing: dict) -> bytes:
     launch_kwargs: dict = {
         "headless": True,
         "args": [
-            "--no-sandbox",           # RestrictNamespaces=true blocks the renderer sandbox
-            "--disable-dev-shm-usage",  # PrivateTmp constrains /dev/shm; fall back to /tmp
+            # NOTE (SA-08): the renderer runs WITHOUT Chromium's native sandbox because the
+            # systemd unit's RestrictNamespaces=true blocks the user namespace it needs. The
+            # process is instead contained by the systemd sandbox (NoNewPrivileges,
+            # ProtectSystem=strict, PrivateTmp, ProtectHome, RestrictNamespaces) and by the
+            # request-abort gate below (no network, no file:// beyond the template). Restoring the
+            # in-browser sandbox (relax RestrictNamespaces for user namespaces + drop --no-sandbox)
+            # or isolating the render in a separate container is host-dependent — tracked for the
+            # deploy pass. The flags below trim the render's attack surface in the meantime.
+            "--no-sandbox",              # RestrictNamespaces=true blocks the renderer sandbox
+            "--disable-dev-shm-usage",   # PrivateTmp constrains /dev/shm; fall back to /tmp
             "--disable-crash-reporter",  # suppress crashpad trying to write a database
+            "--disable-gpu",             # no GPU in a headless service; removes that surface
+            "--disable-extensions",      # load no extensions
+            "--disable-background-networking",  # no Chromium phone-home (the gate blocks it too)
+            "--disable-sync",            # no account sync
         ],
     }
     if exe:
