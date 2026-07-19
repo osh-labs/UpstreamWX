@@ -247,7 +247,13 @@ setup_tls_webroot() {
         d_args+=(-d "$name")
     done
     local primary="${DEPLOY_APP_SERVER_NAME%% *}"
-    if [ -f "/etc/letsencrypt/live/${primary}/fullchain.pem" ]; then
+    # Reuse an existing valid cert if DEPLOY_TLS_CERT already resolves to one (its default is
+    # the app-name path, but an operator can point it at a cert issued under another name —
+    # e.g. one whose lineage is named after the apex). Only issue when no cert is present, so a
+    # good cert is never needlessly re-issued.
+    if [ -f "$DEPLOY_TLS_CERT" ]; then
+        ok "cert already present at $DEPLOY_TLS_CERT"
+    elif [ -f "/etc/letsencrypt/live/${primary}/fullchain.pem" ]; then
         ok "cert already present for ${primary}"
     else
         log "issuing cert via certbot --webroot for: $DEPLOY_APP_SERVER_NAME $DEPLOY_LANDING_SERVER_NAME"
