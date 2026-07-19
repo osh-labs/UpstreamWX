@@ -131,6 +131,17 @@ install -d -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_DATA_DIR"
 install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_ENV_DIR"
 # ACME http-01 webroot for certbot --webroot (SA-09). World-readable (nginx serves it).
 install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_ACME_WEBROOT"
+# The apex landing is served BY NGINX (as its worker user) straight from the release tree,
+# which SA-06 hardens to root:DEPLOY_GROUP with no world access. Add nginx's worker user to
+# DEPLOY_GROUP so it can read current/landing/ — otherwise the apex returns 500 (Permission
+# denied). Debian/Ubuntu uses www-data; RHEL/Amazon Linux uses nginx. Idempotent; harmless on
+# an app-only box with no landing. nginx must be (re)started for the new group to take effect —
+# section 6 does that.
+for _web in www-data nginx; do
+    if id "$_web" >/dev/null 2>&1 && ! id -nG "$_web" | tr ' ' '\n' | grep -qx "$DEPLOY_GROUP"; then
+        usermod -aG "$DEPLOY_GROUP" "$_web" && ok "added $_web to $DEPLOY_GROUP (nginx landing access)"
+    fi
+done
 ok "user + directories ready (base is root-owned)"
 
 # --- 3b. Migrate an old in-place checkout (pre-SA-06) ---------------------------------
@@ -216,8 +227,11 @@ fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 if _nginx_out="$(nginx -t 2>&1)"; then
-    systemctl enable --now nginx >/dev/null 2>&1 || true
-    systemctl reload nginx
+    systemctl enable nginx >/dev/null 2>&1 || true
+    # restart (not reload) so nginx workers pick up the DEPLOY_GROUP membership added above
+    # (needed to read the hardened release tree for the apex landing). Bootstrap is one-time
+    # provisioning, so a restart here is fine; deploy.sh never restarts nginx.
+    systemctl restart nginx
     ok "nginx configured (TLS ${DEPLOY_TLS_ENABLE:-0})"
 else
     warn "nginx -t failed — review before reloading nginx. Output:"
