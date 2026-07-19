@@ -131,6 +131,17 @@ install -d -o "$DEPLOY_USER" -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_DATA_DIR"
 install -d -o root -g "$DEPLOY_GROUP" -m 0750 "$DEPLOY_ENV_DIR"
 # ACME http-01 webroot for certbot --webroot (SA-09). World-readable (nginx serves it).
 install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_ACME_WEBROOT"
+# The apex landing is served BY NGINX (as its worker user) straight from the release tree,
+# which SA-06 hardens to root:DEPLOY_GROUP with no world access. Add nginx's worker user to
+# DEPLOY_GROUP so it can read current/landing/ — otherwise the apex returns 500 (Permission
+# denied). Debian/Ubuntu uses www-data; RHEL/Amazon Linux uses nginx. Idempotent; harmless on
+# an app-only box with no landing. nginx must be (re)started for the new group to take effect —
+# section 6 does that.
+for _web in www-data nginx; do
+    if id "$_web" >/dev/null 2>&1 && ! id -nG "$_web" | tr ' ' '\n' | grep -qx "$DEPLOY_GROUP"; then
+        usermod -aG "$DEPLOY_GROUP" "$_web" && ok "added $_web to $DEPLOY_GROUP (nginx landing access)"
+    fi
+done
 ok "user + directories ready (base is root-owned)"
 
 # --- 3b. Migrate an old in-place checkout (pre-SA-06) ---------------------------------
@@ -216,8 +227,11 @@ fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
 if _nginx_out="$(nginx -t 2>&1)"; then
-    systemctl enable --now nginx >/dev/null 2>&1 || true
-    systemctl reload nginx
+    systemctl enable nginx >/dev/null 2>&1 || true
+    # restart (not reload) so nginx workers pick up the DEPLOY_GROUP membership added above
+    # (needed to read the hardened release tree for the apex landing). Bootstrap is one-time
+    # provisioning, so a restart here is fine; deploy.sh never restarts nginx.
+    systemctl restart nginx
     ok "nginx configured (TLS ${DEPLOY_TLS_ENABLE:-0})"
 else
     warn "nginx -t failed — review before reloading nginx. Output:"
@@ -247,11 +261,20 @@ setup_tls_webroot() {
         d_args+=(-d "$name")
     done
     local primary="${DEPLOY_APP_SERVER_NAME%% *}"
-    if [ -f "/etc/letsencrypt/live/${primary}/fullchain.pem" ]; then
+    # Reuse an existing valid cert if DEPLOY_TLS_CERT already resolves to one (its default is
+    # the app-name path, but an operator can point it at a cert issued under another name —
+    # e.g. one whose lineage is named after the apex). Only issue when no cert is present, so a
+    # good cert is never needlessly re-issued.
+    if [ -f "$DEPLOY_TLS_CERT" ]; then
+        ok "cert already present at $DEPLOY_TLS_CERT"
+    elif [ -f "/etc/letsencrypt/live/${primary}/fullchain.pem" ]; then
         ok "cert already present for ${primary}"
     else
         log "issuing cert via certbot --webroot for: $DEPLOY_APP_SERVER_NAME $DEPLOY_LANDING_SERVER_NAME"
-        certbot certonly --webroot -w "$DEPLOY_ACME_WEBROOT" "${d_args[@]}" \
+        # --cert-name pins the lineage (and therefore the live/<name>/ path) to the app's
+        # primary name, so it always matches DEPLOY_TLS_CERT's default — certbot otherwise names
+        # the dir after the first -d, and any drift makes nginx fail to load the cert.
+        certbot certonly --webroot -w "$DEPLOY_ACME_WEBROOT" --cert-name "$primary" "${d_args[@]}" \
             --email "$DEPLOY_CERTBOT_EMAIL" --agree-tos --non-interactive --keep-until-expiring \
             --deploy-hook "systemctl reload nginx" \
             || { warn "certbot issuance failed — leaving the site HTTP-only; fix DNS/ports and re-run bootstrap"; return 0; }
