@@ -25,8 +25,9 @@ serve app-only (e.g. tailnet staging).
 
 | Path | What |
 | --- | --- |
-| `/opt/upstreamwx` | git checkout + `.venv` (owned by the `upstreamwx` service user) |
-| `/var/lib/upstreamwx` | runtime cache (`UPSTREAMWX_DATA_DIR`) — survives redeploys |
+| `/opt/upstreamwx` | atomic-release base, **root-owned** (SA-06): `repo/` mirror, `releases/<sha>/`, `current` symlink, `uv-python/` shared interpreter |
+| `/opt/upstreamwx/current` | symlink → the active `releases/<sha>` (what systemd runs from) |
+| `/var/lib/upstreamwx` | runtime cache (`UPSTREAMWX_DATA_DIR`, pinned by the unit) — survives redeploys |
 | `/etc/upstreamwx/upstreamwx.env` | runtime env + secrets (`EnvironmentFile`, mode 0640) |
 | `/etc/systemd/system/upstreamwx-api.service` | the service unit |
 | `/etc/nginx/.../upstreamwx-api.conf` | app site: reverse proxy (`:80` → `127.0.0.1:8000`) for `app.upstreamwx.com` |
@@ -327,6 +328,12 @@ manylinux wheels that bundle them.
 | No framed summary in briefings | `ANTHROPIC_API_KEY` unset — expected; the structured posture is unaffected |
 | `certbot` can't bind :80 | open the security group / firewall on 80 and 443 |
 | Briefing requests return **429** | nginx rate limit on `/v1/briefing` + `/v1/watershed/warm` (2 r/s, burst 10, per IP). Normal use never hits it; tune `rate`/`burst` in `deploy/nginx/upstreamwx.conf` if needed, then re-run `bootstrap.sh`. |
+| `bootstrap` aborts: apt `libasound2` (or similar) *has no installation candidate* | Ubuntu 24.04 `t64`-renamed Chromium libs. Fixed in current `bootstrap.sh` (per-package resolve); if on an older copy, `git pull` and re-run. |
+| Deploy fails health with **Permission denied** on `.venv/bin/uvicorn` / `python` | uv put a managed Python under root's `~/.local` (0700). Fixed: it now installs to the shared `<app_dir>/uv-python`. `git pull`, `sudo rm -rf <app_dir>/releases/<sha>` (to force a rebuild), re-run `bootstrap.sh`. |
+| Ensemble warm: **PermissionError** on `/var/lib/upstreamwx/…` on a *staging* box | Stale `UPSTREAMWX_DATA_DIR` in the env file pointing at the prod path. Fixed: the unit now pins `UPSTREAMWX_DATA_DIR` to `DEPLOY_DATA_DIR`. Re-run `bootstrap.sh` (re-renders the unit). |
+| `nginx -t`: **duplicate upstream "upstreamwx_api"** | A stale UpstreamWX site from an earlier run. `grep -rn 'upstream upstreamwx_api' /etc/nginx/`, remove the leftover site (keep the current `<service>.conf`), `sudo nginx -t && sudo systemctl reload nginx`. |
+| `git` in `<app_dir>/repo`: **dubious ownership** | The mirror is root-owned; prefix `sudo`, or leave it alone (it's the deploy's mirror, not yours). |
+| PDF export **503** on a hardened host | Chromium's sandbox needs unprivileged user namespaces. Check `sysctl user.max_user_namespaces` (>0) and `kernel.apparmor_restrict_unprivileged_userns` (0 on 24.04+); if the host can't allow them, set `UPSTREAMWX_PDF_NO_SANDBOX=1` in the env file and restart. |
 
 ## Security notes
 
