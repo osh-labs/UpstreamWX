@@ -65,6 +65,12 @@ def _as_utc(dt: datetime) -> datetime:
     return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
 
 
+def _valid_time_iso(cycle: GefsCycle, fhour: int) -> str:
+    """Naive-UTC ISO valid time (cycle init + fhour) — the display series' hour key (FR-6)."""
+    valid = _as_utc(cycle.init_time) + timedelta(hours=fhour)
+    return valid.astimezone(UTC).replace(tzinfo=None).isoformat()
+
+
 def _select_fhours(cycle: GefsCycle, window_start: datetime, window_end: datetime) -> list[int]:
     """GEFS forecast hours (6-hourly) whose 6 h APCP bucket overlaps the mission window.
 
@@ -268,26 +274,33 @@ def fetch(
 
     # Per forecast hour: member-exceedance fraction (percent), only when a quorum of members
     # answered — a 2-member "50%" is noise, not a probability. Conservative max across the
-    # window; the smallest contributing member count is surfaced as provenance.
+    # window; the smallest contributing member count is surfaced as provenance. The per-hour
+    # values are also retained keyed by valid time for the display hazard graphs (FR-6): the
+    # window-max scalars below are unchanged, so the engine input is identical (NFR-4).
     precip_pcts: list[float] = []
     proxy_pcts: list[float] = []
+    precip_by_valid: dict[str, float] = {}
+    tstm_by_valid: dict[str, float] = {}
     min_members_used: int | None = None
     for f in fhours:
         rows = samples[f]
+        valid_iso = _valid_time_iso(cycle, f)
         apcp_flood = [a for a, _, _ in rows if a is not None]
         paired = [(al, c) for _, al, c in rows if al is not None and c is not None]
         if len(apcp_flood) >= MIN_MEMBERS:
-            precip_pcts.append(
-                100.0 * sum(a > PRECIP_THRESH_MM for a in apcp_flood) / len(apcp_flood)
-            )
+            pct = 100.0 * sum(a > PRECIP_THRESH_MM for a in apcp_flood) / len(apcp_flood)
+            precip_pcts.append(pct)
+            precip_by_valid[valid_iso] = pct
             n = len(apcp_flood)
             min_members_used = n if min_members_used is None else min(min_members_used, n)
         if len(paired) >= MIN_MEMBERS:
-            proxy_pcts.append(
+            pct = (
                 100.0
                 * sum(a > PROXY_PRECIP_MM and c > PROXY_CAPE_JKG for a, c in paired)
                 / len(paired)
             )
+            proxy_pcts.append(pct)
+            tstm_by_valid[valid_iso] = pct
             n = len(paired)
             min_members_used = n if min_members_used is None else min(min_members_used, n)
 
@@ -303,6 +316,9 @@ def fetch(
 
     bundle.gefs_p_precip = gefs_precip
     bundle.gefs_p_tstm = gefs_tstm
+    # Retain the per-forecast-hour series for the display hazard graphs (FR-6, display only).
+    bundle.gefs_precip_hourly = precip_by_valid
+    bundle.gefs_tstm_hourly = tstm_by_valid
     # Exceedance fraction doubles as member support for the confidence qualifier (§16.5). REFS
     # wins in-window at the orchestrator merge; GEFS support carries beyond REFS range.
     if gefs_precip is not None:

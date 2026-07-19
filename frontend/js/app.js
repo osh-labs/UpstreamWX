@@ -1002,15 +1002,38 @@ let _chartSeq = 0;
 const _pendingCharts = [];
 
 // Interactive SVG line chart with touch/mouse crosshair.
-function lineChart(series, labels, colors) {
+//
+// opts (all optional, back-compat: 3-arg calls behave exactly as before):
+//   opts.bands  — [{from,to,class,label}] horizontal threshold rects drawn behind the
+//                 lines, filled with the class' token color (e.g. sev-*, heat-*) at low
+//                 opacity and clipped to the chart's y-range (heat/cold index charts).
+//   opts.styles — per-series [{width,opacity,dash}] so a primary line can read bold/opaque
+//                 and a secondary overlay faint/thin (flash_flood ensemble vs hourly).
+//   opts.unit   — y-axis unit label ("%" / "°F") drawn top-left of the axis.
+// A `null` in any values array is a data GAP: the line breaks (a new subpath) rather than
+// interpolating through 0, and the crosshair skips that point for that series.
+function lineChart(series, labels, colors, opts = {}) {
   const id = `chart-${++_chartSeq}`;
   const W = 320, H = 128;
   const padL = 30, padR = 8, padT = 8, padB = 20;
-  const all = series.flat();
-  const min = Math.min(...all), max = Math.max(...all);
+  const styles = opts.styles || [];
+  // Ignore nulls when scaling — Math.min/max coerce null→0, which would crush the range.
+  const all = series.flat().filter((v) => v != null);
+  const min = all.length ? Math.min(...all) : 0;
+  const max = all.length ? Math.max(...all) : 1;
   const span = max - min || 1;
   const xFn = (i) => padL + (i * (W - padL - padR)) / (labels.length - 1);
   const yFn = (v) => padT + (1 - (v - min) / span) * (H - padT - padB);
+
+  // Threshold bands (behind everything): map each class to its token color at low opacity,
+  // clip the rect to the plot's y-range so a band partly out of range still shows its slice.
+  const bands = (opts.bands || []).map((band) => {
+    const y0 = Math.max(padT, Math.min(H - padB, yFn(band.to)));
+    const y1 = Math.max(padT, Math.min(H - padB, yFn(band.from)));
+    const top = Math.min(y0, y1), h = Math.abs(y1 - y0);
+    if (h < 0.5) return "";
+    return `<rect x="${padL}" y="${top.toFixed(1)}" width="${W - padL - padR}" height="${h.toFixed(1)}" fill="var(--${esc(band.class)})" fill-opacity="0.16"/>`;
+  }).join("");
 
   const GRID_N = 4;
   const grids = Array.from({ length: GRID_N }, (_, i) => {
@@ -1021,9 +1044,21 @@ function lineChart(series, labels, colors) {
       <text x="${padL - 3}" y="${yp}" fill="var(--color-text-muted)" font-size="8" text-anchor="end" dominant-baseline="middle">${Math.round(val)}</text>`;
   }).join("");
 
+  const unitLbl = opts.unit
+    ? `<text x="2" y="8" fill="var(--color-text-muted)" font-size="8" text-anchor="start">${esc(opts.unit)}</text>`
+    : "";
+
+  // Build one path per series, breaking the subpath on each null (gap).
   const lines = series.map((s, si) => {
-    const d = s.map((v, i) => `${i ? "L" : "M"}${xFn(i).toFixed(1)} ${yFn(v).toFixed(1)}`).join(" ");
-    return `<path d="${d}" fill="none" stroke="${colors[si]}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>`;
+    let d = "", pen = false;
+    s.forEach((v, i) => {
+      if (v == null) { pen = false; return; }
+      d += `${pen ? "L" : "M"}${xFn(i).toFixed(1)} ${yFn(v).toFixed(1)} `;
+      pen = true;
+    });
+    const st = styles[si] || {};
+    const dash = st.dash ? ` stroke-dasharray="${st.dash}"` : "";
+    return `<path d="${d.trim()}" fill="none" stroke="${colors[si]}" stroke-width="${st.width ?? 2}" opacity="${st.opacity ?? 1}"${dash} stroke-linecap="round" stroke-linejoin="round"/>`;
   }).join("");
 
   // Show at most ~5 evenly-spaced tick labels so they don't overlap on mobile.
@@ -1056,7 +1091,7 @@ function lineChart(series, labels, colors) {
   </g>`;
 
   _pendingCharts.push({ id, series, labels, min, span, W, H, padL, padR, padT, padB });
-  return `<svg id="${id}" class="chart" viewBox="0 0 ${W} ${H}" role="img">${grids}${ticks}${lines}${xhair}</svg>`;
+  return `<svg id="${id}" class="chart" viewBox="0 0 ${W} ${H}" role="img">${bands}${grids}${unitLbl}${ticks}${lines}${xhair}</svg>`;
 }
 
 function flushChartInits() {
@@ -1098,6 +1133,14 @@ function initChartInteractivity({ id, series, labels, min, span, W, H, padL, pad
 
     series.forEach((s, si) => {
       const v = s[i];
+      // Data gap for this series at this hour — park the crosshair marks off-canvas.
+      if (v == null) {
+        hLines[si].setAttribute("x2", cx);
+        dots[si].setAttribute("cx", -99); dots[si].setAttribute("cy", -99);
+        vals[si].textContent = "";
+        valBgs[si].setAttribute("width", 0); valBgs[si].setAttribute("x", -99);
+        return;
+      }
       const cy = yFn(v);
 
       // Horizontal guide from Y-axis to dot
@@ -1187,7 +1230,55 @@ function thresholdLogicHtml(logic, currentLabel = "") {
   return `<ul class="logic-list">${entries.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
 }
 
+// Per-hazard forecast-trend chart (Hazards tab detail card). Reads the FROZEN `series`
+// block on each hazard_detail (primary/secondary/bands), all index-aligned 1:1 to
+// forecast_hourly.hours. The line is the hazard's tier color; heat draws over its bands so
+// it uses a strong contrasting line (--sev-high) instead of a heat-ramp token that would
+// blend into the shading. A null value renders as a break in the line, never a 0 (FR-20,
+// accessibility §9: every chart is paired with a text caption).
+function hazardChart(h, hours) {
+  const s = h.series;
+  const hasPrimary = s && s.primary && Array.isArray(s.primary.values) &&
+    s.primary.values.some((v) => v != null) && hours.length;
+  if (!hasPrimary) {
+    return `<div class="chart-caption">Forecast series unavailable for this hazard.</div>`;
+  }
+
+  const unit = s.primary.unit || "";
+  // Tier color for the line; heat sits over translucent heat bands so use --sev-high.
+  const lineColor = h.hazard === "heat" ? "var(--sev-high)" : `var(--${esc(h.severity_class)})`;
+
+  const seriesArr = [s.primary.values];
+  const colors = [lineColor];
+  const styles = [{ width: 2, opacity: 1 }];
+  const captions = [`${esc(s.primary.label)} (${esc(unit)})`];
+
+  // flash_flood overlay: faint dashed secondary (hourly precip prob) under the ensemble line.
+  const hasSecondary = s.secondary && Array.isArray(s.secondary.values) &&
+    s.secondary.values.some((v) => v != null);
+  if (hasSecondary) {
+    seriesArr.push(s.secondary.values);
+    colors.push("var(--color-text-muted)");
+    styles.push({ width: 1.5, opacity: 0.5, dash: "3 3" });
+    captions[0] = `${esc(s.primary.label)} (ensemble, bold)`;
+    captions.push(`${esc(s.secondary.label)} (hourly, faint)`);
+  }
+
+  const opts = { unit, styles };
+  if (s.bands && s.bands.length) opts.bands = s.bands;
+
+  const chart = lineChart(seriesArr, hours, colors, opts);
+  const bandNote = (s.bands && s.bands.length)
+    ? ` · shaded bands: ${s.bands.map((x) => esc(x.label)).join(" / ")}` : "";
+  // The ensemble-driven hazards (flash flood, lightning) plot coarser (step) GEFS/REFS
+  // series; the thermal hazards plot the hourly point forecast, so only note it where true.
+  const isEnsemble = h.hazard === "flash_flood" || h.hazard === "lightning";
+  const resNote = isEnsemble ? " · ensemble series are coarser resolution" : "";
+  return `${chart}<div class="chart-caption">${captions.join(" · ")}${bandNote}${resNote}</div>`;
+}
+
 function renderHazards(b) {
+  const chartHours = (b.forecast_hourly?.hours || []).map(fmtClock);
   const phaseHead = `<div></div>${["approach", "technical", "egress"]
     .map((p) => `<div class="timeline__phase-head">${PHASE_LABELS[p]}</div>`)
     .join("")}`;
@@ -1225,6 +1316,8 @@ function renderHazards(b) {
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
         <h4>Threshold logic</h4>
         ${thresholdLogicHtml(h.logic, h.label)}
+        <h4>Forecast trend</h4>
+        ${hazardChart(h, chartHours)}
         ${h.assumptions.map((a) => `<div class="assumption">${icon("alert", "")}<span>${esc(a)}</span></div>`).join("")}
       </div>
     </details>`
@@ -1242,6 +1335,7 @@ function renderHazards(b) {
     </section>
     <div style="display:flex;flex-direction:column;gap:var(--space-2)">${details}</div>
     <div class="disclaimer">Severity on the UpstreamWX ladder (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(" / ")}). Confidence shown as hatching and an explicit label; bar length distinguishes persistent hazards from time-windowed hazards (display only).</div>`;
+  flushChartInits();
   linkifyAcronyms(document.getElementById("view-hazards"));
 }
 

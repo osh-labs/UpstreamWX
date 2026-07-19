@@ -29,6 +29,7 @@ from ..engine.models import (
     PhaseAssessment,
     Tier,
 )
+from ..engine.thresholds import ThresholdConfig, load_thresholds
 from ..ingest.base import IngestBundle, bundle_data_gaps
 from ..watershed import PourpointBasin, UpstreamTrace
 from .frame import _INSERT_BEFORE, _SUMMARY_HEADING
@@ -182,7 +183,93 @@ def _timeline(result: BriefingResult) -> list[dict]:
     return rows
 
 
-def _hazard_detail(result: BriefingResult) -> list[dict]:
+# Chart-axis extents for the open-ended top/bottom threshold bands (display only, *not* hazard
+# cut points — those are read from the YAML config below). The Extreme Danger heat band and the
+# Extreme cold/wet band have no next cut, so their outer edge is a plotting extent, not a rule.
+_HEAT_AXIS_MAX_F = 150.0
+_COLD_AXIS_MIN_F = -60.0
+
+
+def _r(values: list[float | None]) -> list[float | None]:
+    """Round a display series to 1 decimal, preserving ``None`` coverage gaps (NFR-6)."""
+    return [None if v is None else round(v, 1) for v in values]
+
+
+def _heat_bands(config: ThresholdConfig) -> list[dict]:
+    """NWS Heat Index category bands (°F), cut points read from heat.yaml (FR-15, FR-20a)."""
+    cats = config.heat["categories"]
+    return [
+        {"from": float(cats["caution_min"]), "to": float(cats["extreme_caution_min"]),
+         "class": "heat-caution", "label": "Caution"},
+        {"from": float(cats["extreme_caution_min"]), "to": float(cats["danger_min"]),
+         "class": "heat-ext-caution", "label": "Extreme Caution"},
+        {"from": float(cats["danger_min"]), "to": float(cats["extreme_danger_min"]),
+         "class": "heat-danger", "label": "Danger"},
+        {"from": float(cats["extreme_danger_min"]), "to": _HEAT_AXIS_MAX_F,
+         "class": "heat-ext-danger", "label": "Extreme Danger"},
+    ]
+
+
+def _cold_bands(config: ThresholdConfig) -> list[dict]:
+    """Cold/wet apparent-temp tier bands (°F), cut points read from cold_wet.yaml (FR-20a).
+
+    Coldest band wins in the engine; the graph shades warmest-first-up so ``from`` < ``to``.
+    """
+    b = config.cold_wet["apparent_temp"]
+    return [
+        {"from": _COLD_AXIS_MIN_F, "to": float(b["extreme_max"]),
+         "class": "sev-extreme", "label": "Extreme"},
+        {"from": float(b["extreme_max"]), "to": float(b["high_max"]),
+         "class": "sev-high", "label": "High"},
+        {"from": float(b["high_max"]), "to": float(b["elevated_max"]),
+         "class": "sev-elevated", "label": "Elevated"},
+    ]
+
+
+def _hazard_series_block(
+    hazard: Hazard, bundle: IngestBundle | None, config: ThresholdConfig
+) -> dict | None:
+    """Per-hazard display series for the PWA hazard graphs (FR-6), or None when unavailable.
+
+    Values are index-aligned 1:1 with ``forecast_hourly.hours`` (the shared mission-clock axis,
+    which the frontend supplies from that field). Display only — sourced verbatim from the
+    bundle's :class:`~upstreamwx.ingest.base.HazardSeries`, never re-read by the engine (FR-13).
+    """
+    hs = bundle.hazard_series if bundle is not None else None
+    if hs is None:
+        return None
+    if hazard is Hazard.FLASH_FLOOD:
+        return {
+            "primary": {"label": "Ensemble P(precip)", "unit": "%",
+                        "values": _r(hs.ff_ensemble_pct)},
+            "secondary": {"label": "Hourly precip prob", "unit": "%",
+                          "values": _r(hs.precip_pct)},
+            "bands": None,
+        }
+    if hazard is Hazard.LIGHTNING:
+        return {
+            "primary": {"label": "Ensemble P(thunder)", "unit": "%",
+                        "values": _r(hs.lightning_ensemble_pct)},
+            "secondary": None,
+            "bands": None,
+        }
+    if hazard is Hazard.HEAT:
+        return {
+            "primary": {"label": "Heat index", "unit": "°F", "values": _r(hs.heat_index_f)},
+            "secondary": None,
+            "bands": _heat_bands(config),
+        }
+    # COLD_WET
+    return {
+        "primary": {"label": "Apparent temp", "unit": "°F", "values": _r(hs.apparent_temp_f)},
+        "secondary": None,
+        "bands": _cold_bands(config),
+    }
+
+
+def _hazard_detail(
+    result: BriefingResult, bundle: IngestBundle | None, config: ThresholdConfig
+) -> list[dict]:
     out: list[dict] = []
     for hazard in _HAZARD_ORDER:
         p = result.bluf.get(hazard)
@@ -197,6 +284,7 @@ def _hazard_detail(result: BriefingResult) -> list[dict]:
                 "drivers": list(p.drivers),
                 "logic": HAZARD_LOGIC.get(hazard, ""),
                 "assumptions": list(p.notes),
+                "series": _hazard_series_block(hazard, bundle, config),
             }
         )
     return out
@@ -434,6 +522,9 @@ def to_structured(gen: GeneratedBriefing, *, cached: bool, cache_cycle: str) -> 
 
     forecast_hourly, temp_series, wind_series = _forecast(bundle)
     risk_inputs = _risk_inputs(bundle)
+    # Threshold config for the heat/cold display bands (cut points from the YAML, FR-20a); the
+    # engine already assessed with these versions (result.threshold_version). Display only.
+    config = load_thresholds()
     return {
         "markdown": gen.markdown,
         "mission": {
@@ -469,7 +560,7 @@ def to_structured(gen: GeneratedBriefing, *, cached: bool, cache_cycle: str) -> 
         "metrics": _metrics(bundle),
         "phases": [_phase(pa) for pa in result.phases],
         "timeline": _timeline(result),
-        "hazard_detail": _hazard_detail(result),
+        "hazard_detail": _hazard_detail(result, bundle, config),
         "forecast_hourly": forecast_hourly,
         "temp_series": temp_series,
         "wind_series": wind_series,

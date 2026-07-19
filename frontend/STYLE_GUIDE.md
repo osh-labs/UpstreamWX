@@ -318,6 +318,29 @@ The defining drill-down visual. **Phase-primary**:
 - Body: key drivers, explicit confidence label, the relevant threshold logic
   (Appendix B), and stated assumptions (wet-egress / cave-isolation / slot).
 
+### 7.10a Hazard series chart (`lineChart` in a `.hazard-detail__body`) — FR-20
+- Each hazard detail card renders an inline-SVG line graph of that hazard's driving
+  quantity over the shared mission clock (`forecast_hourly.hours`), read from the
+  `series` block on the `hazard_detail`. Flash flood / lightning plot **probability
+  (%)**; heat / cold plot an **index value (°F)**.
+- **Line color = the hazard's tier token** (`--sev-*` matching `severity_class`).
+  **Exception:** heat draws *over* its translucent heat-ramp bands, so its line uses
+  the strong contrasting `--sev-high` rather than a `--heat-*` token that would blend
+  into its own shading.
+- **Threshold bands** (heat / cold only) fill horizontal rects behind the line with the
+  band's own token (`--heat-*` for heat, `--sev-*` for cold) at `fill-opacity 0.16`,
+  clipped to the plot's y-range. **No new colors** are invented — bands reuse §3.4 /
+  §3.5 tokens.
+- **Overlay** (flash flood only): the ensemble probability is the bold/opaque primary
+  line; the hourly-precip secondary is faint (thinner, `opacity 0.5`, dashed,
+  `--color-text-muted`).
+- A **`null` value is a data gap** — the line breaks (never drawn as 0).
+- **Caption required** (accessibility §9 — never color alone): every chart is paired
+  with a `.chart-caption` naming the quantity + unit, the band labels, the ensemble vs
+  hourly distinction, and a note that ensemble series are coarser resolution. Charts
+  are self-contained inline SVG built from same-origin `app.js` (attributes only, no
+  `<style>`/`<script>` blocks) so they satisfy the SA-05 strict `script-src 'self'` CSP.
+
 ### 7.11 Map card (`.map-card`) — Appendix D §18.4
 - Map fills the view; the **upstream watershed overlay** is the hero layer
   (`--sev-elevated`/brand tinted polygon). A floating **point-conditions callout**

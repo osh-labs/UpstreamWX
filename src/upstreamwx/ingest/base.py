@@ -9,6 +9,7 @@ The engine never imports a provider directly (FR-13, §12): every source fills a
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
 from ..engine.models import HazardInputs, Mission
@@ -17,6 +18,12 @@ if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
 
     from ..watershed import PourpointBasin
+
+# Step-hold buckets for resampling the sparse ensemble forecast-hour values onto the dense
+# mission-clock axis (FR-7/7a cadences). A GEFS value at valid time V is the P over the 6 h
+# APCP bucket (V-6, V]; a REFS value covers its ~3 h accumulation window (V-3, V]. Display only.
+_GEFS_BUCKET_H = 6
+_REFS_BUCKET_H = 3
 
 
 @dataclass
@@ -38,6 +45,33 @@ class ForecastHourly:
     precip_pct: list[float | None]         # precipitation probability, percent
     qpf_in: list[float | None]             # quantitative precip forecast, inch
     sky: list[str]                         # WMO weather-code emoji per hour
+    # Naive-UTC valid time of each hour, index-aligned with ``hours``. Display-only plumbing:
+    # the shared mission-clock axis onto which the sparse ensemble forecast hours are resampled
+    # (see :func:`build_hazard_series`). Never serialized, never an engine input.
+    hours_dt: list[datetime] = field(default_factory=list)
+
+
+@dataclass
+class HazardSeries:
+    """Per-forecast-hour hazard series over the mission window (FR-6; PWA hazard graphs).
+
+    The hazard-card analogue of :class:`ForecastHourly`: built from the *same* ingest that
+    feeds the engine's scalar hazard inputs, then carried on the bundle so the PWA can graph
+    probability-over-mission-time on each hazard card. Like ``ForecastHourly`` the engine
+    never reads this — it is display data only and never changes a posture (FR-13, FR-20,
+    NFR-4). Every list is index-aligned with ``ForecastHourly.hours`` (the shared mission-clock
+    axis); a ``None`` entry is a genuine coverage gap (no ensemble/forecast hour covers that
+    clock hour) and must never be read as a benign zero (data quality first-class, NFR-6).
+    """
+
+    # Merged ensemble series: REFS authoritative in-window, GEFS beyond, per-hour max where
+    # both cover an hour (the per-hour analogue of the scalar FR-19 merge).
+    ff_ensemble_pct: list[float | None]         # flash-flood P(precip) %, per hour
+    lightning_ensemble_pct: list[float | None]  # lightning P(thunder) %, per hour
+    # Thermal / surface-precip display series (Open-Meteo), aligned to the same axis.
+    precip_pct: list[float | None]              # hourly precipitation probability, %
+    heat_index_f: list[float | None]            # NWS heat index (Rothfusz), deg F
+    apparent_temp_f: list[float | None]         # apparent temperature, deg F
 
 
 @dataclass
@@ -68,6 +102,25 @@ class IngestBundle:
     # Per-hour display forecast over the window (FR-6; M0.4 Forecast view). Display only,
     # not an engine input; None when ingest could not populate it (NFR-6).
     forecast_hourly: ForecastHourly | None = None
+
+    # Per-forecast-hour display series for the PWA hazard graphs, built by
+    # :func:`build_hazard_series` at the end of ingest once the ensemble raw arrays and the
+    # forecast-hour axis are both present. Display only, never an engine input (FR-13); None on
+    # the offline ``inputs`` path or when no forecast axis was gathered.
+    hazard_series: HazardSeries | None = None
+
+    # Raw per-forecast-hour ensemble probabilities the providers compute *before* collapsing to
+    # the window-max scalars below (display only, never an engine input). Keyed by the valid
+    # time's naive-UTC ISO string -> percent. GEFS steps 6-hourly, REFS 3-hourly; they are
+    # resampled onto the mission-clock axis by :func:`build_hazard_series`.
+    gefs_precip_hourly: dict[str, float] = field(default_factory=dict)
+    gefs_tstm_hourly: dict[str, float] = field(default_factory=dict)
+    refs_precip_hourly: dict[str, float] = field(default_factory=dict)
+    refs_lightning_hourly: dict[str, float] = field(default_factory=dict)
+    # Per-hour NWS heat index (deg F), index-aligned with ``forecast_hourly.hours``; the hourly
+    # basis of the ``heat_index_f`` window-max scalar (display only). Apparent temp and precip%
+    # per hour already survive on ``forecast_hourly`` (feels_f / precip_pct).
+    heat_index_hourly: list[float | None] = field(default_factory=list)
 
     # GEFS ensemble over the upstream domain (FR-7).
     gefs_p_precip: float | None = None
@@ -157,6 +210,69 @@ def bundle_data_gaps(bundle: IngestBundle) -> list[str]:
             "upstream watershed trace may be incomplete (basin possibly larger than mapped)"
         )
     return gaps
+
+
+def _cover(grid_dt: datetime, by_valid: dict[str, float], bucket_h: int) -> float | None:
+    """Value whose step-hold bucket ``(V - bucket_h, V]`` covers ``grid_dt`` (max if several).
+
+    The sparse ensemble forecast hours are resampled onto the dense mission-clock axis by
+    step-holding each value back across its accumulation/step bucket. Taking the max where more
+    than one bucket covers an hour (e.g. a REFS spin-up backfill at the same valid time) is
+    commutative, so the result is independent of dict insertion order (NFR-4). Display only.
+    """
+    best: float | None = None
+    for iso, pct in by_valid.items():
+        v = datetime.fromisoformat(iso)
+        if v - timedelta(hours=bucket_h) < grid_dt <= v:
+            best = pct if best is None else max(best, pct)
+    return best
+
+
+def _merge_hour(a: float | None, b: float | None) -> float | None:
+    """Per-hour ensemble merge: max where both cover the hour, else whichever exists, else None.
+
+    The per-hour analogue of the scalar GEFS/REFS merge (REFS authoritative in-window, GEFS
+    beyond, higher value where both — FR-19). ``None`` is a genuine coverage gap, never a 0.
+    """
+    vals = [x for x in (a, b) if x is not None]
+    return max(vals) if vals else None
+
+
+def build_hazard_series(bundle: IngestBundle) -> HazardSeries | None:
+    """Resample the raw ensemble + thermal arrays onto the mission-clock axis (FR-6, NFR-4).
+
+    Produces the two merged ensemble series (flash-flood P(precip), lightning P(thunder)) plus
+    the thermal display series, all index-aligned 1:1 with ``forecast_hourly.hours``. Returns
+    ``None`` when no forecast axis was gathered (offline/degraded), so the hazard cards fall
+    back to a placeholder. Pure and deterministic — display only, never an engine input (FR-13).
+    """
+    fh = bundle.forecast_hourly
+    if fh is None or not fh.hours_dt:
+        return None
+    n = len(fh.hours)
+    ff: list[float | None] = []
+    ltng: list[float | None] = []
+    for gdt in fh.hours_dt:
+        ff.append(
+            _merge_hour(
+                _cover(gdt, bundle.gefs_precip_hourly, _GEFS_BUCKET_H),
+                _cover(gdt, bundle.refs_precip_hourly, _REFS_BUCKET_H),
+            )
+        )
+        ltng.append(
+            _merge_hour(
+                _cover(gdt, bundle.gefs_tstm_hourly, _GEFS_BUCKET_H),
+                _cover(gdt, bundle.refs_lightning_hourly, _REFS_BUCKET_H),
+            )
+        )
+    heat = list(bundle.heat_index_hourly) if bundle.heat_index_hourly else [None] * n
+    return HazardSeries(
+        ff_ensemble_pct=ff,
+        lightning_ensemble_pct=ltng,
+        precip_pct=list(fh.precip_pct),
+        heat_index_f=heat,
+        apparent_temp_f=list(fh.feels_f),
+    )
 
 
 class Provider(Protocol):
