@@ -54,6 +54,12 @@ load_config() {
     : "${DEPLOY_REPO_MIRROR:=${DEPLOY_APP_DIR}/repo}"
     : "${DEPLOY_RELEASES_DIR:=${DEPLOY_APP_DIR}/releases}"
     : "${DEPLOY_CURRENT_LINK:=${DEPLOY_APP_DIR}/current}"
+    # Shared dir for uv-managed CPython. uv sync runs as ROOT (SA-06); on a distro without a
+    # system 3.11 (e.g. Ubuntu 24.04) uv downloads a managed interpreter, and its default target
+    # is root's ~/.local (0700) — which the venv symlinks into, so the service user can't exec it
+    # (EACCES on uvicorn). Install it here instead: shared, group/world-readable, stable across
+    # releases (rollback-safe), no secrets.
+    : "${DEPLOY_UV_PYTHON_DIR:=${DEPLOY_APP_DIR}/uv-python}"
     # How many past releases to keep for rollback (the active one is never pruned).
     : "${DEPLOY_KEEP_RELEASES:=5}"
     # SA-07: when "1", deploy.sh verifies the GPG signature of an annotated tag before
@@ -327,8 +333,16 @@ build_release() {
     # path (a build-then-rename would bake a stale path into the venv). uv runs as ROOT here
     # (the whole point of SA-06): the resulting venv is root-owned and the runtime account
     # cannot tamper with it. `--frozen` installs the exact committed uv.lock set.
-    ( cd "$RELEASE_DIR" && uv sync --frozen --no-dev --python 3.11 ) \
+    #
+    # Direct any uv-managed CPython download into the SHARED interpreter dir (not root's private
+    # ~/.local) so the venv's python symlink resolves to a path the service user can read+exec;
+    # otherwise uvicorn fails with EACCES. Then make the interpreter tree world-readable+exec
+    # (it holds no secrets) so the non-root service can run it.
+    install -d -o root -g "$DEPLOY_GROUP" -m 0755 "$DEPLOY_UV_PYTHON_DIR"
+    ( cd "$RELEASE_DIR" \
+        && UV_PYTHON_INSTALL_DIR="$DEPLOY_UV_PYTHON_DIR" uv sync --frozen --no-dev --python 3.11 ) \
         || die "uv sync failed for $RELEASE_SHA — release not activated"
+    chmod -R a+rX "$DEPLOY_UV_PYTHON_DIR" 2>/dev/null || true
 
     # Fail fast if the GRIB stack can't import (the most likely host-specific breakage).
     "$RELEASE_DIR/.venv/bin/python" -c "import cfgrib" 2>/dev/null \

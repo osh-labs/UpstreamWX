@@ -27,6 +27,11 @@ Group=__GROUP__
 # start, so a `current` flip + restart cleanly moves the service to the new release.
 WorkingDirectory=__APP_DIR__/current
 EnvironmentFile=__ENV_FILE__
+# Pin the data dir to the deploy's DEPLOY_DATA_DIR so it ALWAYS matches ReadWritePaths below,
+# regardless of the env file. This Environment= comes AFTER EnvironmentFile=, so it overrides
+# any UPSTREAMWX_DATA_DIR in the file — otherwise a stale/wrong path in the env file points the
+# app at a dir systemd makes read-only (ProtectSystem=strict) and the service account doesn't own.
+Environment=UPSTREAMWX_DATA_DIR=__DATA_DIR__
 # Playwright's headless Chromium binary location (server-side PDF export, FR-27). deploy.sh
 # installs the browser INTO the release (__APP_DIR__/current/.playwright-browsers) so a
 # rollback restores the browser that matches that release's Playwright.
