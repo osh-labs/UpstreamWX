@@ -251,7 +251,10 @@ setup_tls_webroot() {
         ok "cert already present for ${primary}"
     else
         log "issuing cert via certbot --webroot for: $DEPLOY_APP_SERVER_NAME $DEPLOY_LANDING_SERVER_NAME"
-        certbot certonly --webroot -w "$DEPLOY_ACME_WEBROOT" "${d_args[@]}" \
+        # --cert-name pins the lineage (and therefore the live/<name>/ path) to the app's
+        # primary name, so it always matches DEPLOY_TLS_CERT's default — certbot otherwise names
+        # the dir after the first -d, and any drift makes nginx fail to load the cert.
+        certbot certonly --webroot -w "$DEPLOY_ACME_WEBROOT" --cert-name "$primary" "${d_args[@]}" \
             --email "$DEPLOY_CERTBOT_EMAIL" --agree-tos --non-interactive --keep-until-expiring \
             --deploy-hook "systemctl reload nginx" \
             || { warn "certbot issuance failed — leaving the site HTTP-only; fix DNS/ports and re-run bootstrap"; return 0; }
