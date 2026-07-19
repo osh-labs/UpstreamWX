@@ -61,7 +61,7 @@ src/upstreamwx/        backend package (importable as `upstreamwx`)
     hazards/               one pure evaluate() per hazard: flash_flood, lightning, heat, cold_wet
   data/thresholds/*.yaml   externalized Appendix B threshold matrices + provenance
   ingest/                provider abstraction + live adapters (nws, openmeteo, spc, gefs_provider, refs_provider)
-    base.py                IngestBundle + Provider Protocol + to_hazard_inputs()
+    base.py                IngestBundle + Provider Protocol + to_hazard_inputs() + to_phase_hazard_inputs() (per-phase slicing) + HazardSeries/build_hazard_series (display-only hazard graphs)
     orchestrator.py        mission -> trace -> bundle -> HazardInputs
   grib/                  shared GRIB2 .idx byte-range subsetting + polygon zonal aggregation (used by gefs + refs)
   gefs/                  GEFS global ensemble processor — per-member grids, in-house member-exceedance (SREF replacement)
@@ -497,6 +497,28 @@ tables, bullet lists, bold, and URLs. When Haiku framing is active (`b.framed ==
 non-dismissible attribution banner appears above the text. The `markdown` field is now
 included in `to_structured()` (and therefore in the structured JSON contract and
 `sample-briefing.json`) rather than being spliced in separately by the service layer.
+
+**Hourly hazard series + time-aware phases (2026-07-19).** Each hazard card now graphs its driving
+quantity over mission time, and the phase assessments respond to the *hourly* forecast instead of the
+coarse approach/egress time estimate (changelog `docs/changelog-2026-07-19-hourly-hazard-series.md`).
+The providers stopped discarding the per-forecast-hour arrays they compute before the window-max
+collapse: `IngestBundle` carries the raw arrays (`gefs_*_hourly`/`refs_*_hourly` keyed by valid-time
+ISO, `heat_index_hourly`) plus a **display-only** `HazardSeries` (`build_hazard_series` resamples the
+sparse ensemble hours onto `ForecastHourly.hours_dt`, the shared mission clock — 6 h GEFS / 3 h REFS
+step-hold, per-hour `max` merge, gaps as `None` never `0`), and `to_structured` emits a per-hazard
+`series` block (`primary`/`secondary`/`bands`; heat/cold bands from the threshold YAML). The engine
+never reads any of it (`to_hazard_inputs` bit-identical, test-locked — FR-13, NFR-4). The PWA renders
+a self-contained inline-SVG chart per card via the extended `lineChart()` (bands, bold ensemble + faint
+overlay, null-gap breaks; CSP `script-src 'self'` intact): flash flood = ensemble + faint hourly precip
+overlay, lightning = ensemble-only, heat/cold = index line over threshold bands. For the phase math,
+`ingest/base.to_phase_hazard_inputs()` builds a per-phase `HazardInputs` by reducing the **local**
+hazards (heat max / cold coldest apparent temp / lightning max) over each phase's own hours, and
+`assess(..., phase_inputs=...)` (opt-in; `None` = byte-identical to before) evaluates each phase against
+its slice — threaded on the live path in `generate_briefing`. **Flash flood is deliberately left
+window-conservative** (upstream-watershed routing, §16.1 — earlier upstream rain arrives in-slot on a
+travel-time lag, so slicing would understate it). Phases tile the window, so the overall FR-19 `max` is
+unchanged for heat/cold and can only *lower* lightning when its peak sits in the sheltered technical span
+(not applicable there anyway, FR-14c). Offline suite green (512); frontend verified via headless Chromium.
 
 Deferred to **M0.1.1** (requires the always-on EC2 host; cannot be validated in an
 ephemeral container): the recurring GEFS/REFS scheduler **cadence** and the

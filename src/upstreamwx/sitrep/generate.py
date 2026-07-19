@@ -66,7 +66,9 @@ def generate_briefing(
 
     bundle: IngestBundle | None = None
     upstream = None
+    phase_inputs = None
     if inputs is None:
+        from ..ingest.base import to_phase_hazard_inputs
         from ..ingest.orchestrator import gather_inputs
 
         inputs, bundle = gather_inputs(mission, cycle=cycle)
@@ -76,8 +78,12 @@ def generate_briefing(
         upstream = bundle.upstream
         if upstream is None and bundle.sources_ok.get("watershed") is False:
             warnings.append("upstream delineation unavailable")
+        # Phase-scoped feature vectors so the local hazards (heat/cold/lightning) respond to
+        # the forecast *during* each phase; None when no forecast axis was gathered, and never
+        # on the offline ``inputs`` path — assess then uses the single window vector unchanged.
+        phase_inputs = to_phase_hazard_inputs(bundle, mission, inputs)
 
-    result = assess(mission, inputs)
+    result = assess(mission, inputs, phase_inputs=phase_inputs)
     structured = render_md(result, upstream=upstream, bundle=bundle, generated_at=generated_at)
 
     want_frame = frame if frame is not None else bool(get_settings().anthropic_api_key)

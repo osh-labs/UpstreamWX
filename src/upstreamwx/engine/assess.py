@@ -113,8 +113,22 @@ def assess(
     mission: Mission,
     inputs: HazardInputs,
     config: ThresholdConfig | None = None,
+    *,
+    phase_inputs: dict[Phase, HazardInputs] | None = None,
 ) -> BriefingResult:
-    """Produce the structured multi-hazard briefing for a mission."""
+    """Produce the structured multi-hazard briefing for a mission.
+
+    ``phase_inputs`` — optional per-phase feature vectors (from
+    :func:`~upstreamwx.ingest.base.to_phase_hazard_inputs`) so the *local* hazards (heat,
+    cold/wet, lightning) are scored against the forecast *during that phase* rather than the
+    whole-window worst case (the "phase planning responds to the hourly forecast" behavior).
+    When ``None`` (the offline ``inputs`` path, the corpus, any legacy caller) every phase uses
+    the single window ``inputs`` — behavior is byte-identical to before (NFR-4). Flash flood is
+    left window-conservative even when ``phase_inputs`` is given (see ``to_phase_hazard_inputs``);
+    because the phases tile the window, the overall FR-19 max is unchanged for heat and cold/wet,
+    and can only *lower* lightning when its peak falls in the technical span the party is sheltered
+    through (lightning is not applicable there anyway).
+    """
     config = config or load_thresholds()
     windows, inferred = infer_phases(mission)
     activity = mission.activity_type
@@ -125,13 +139,14 @@ def assess(
     for phase in (Phase.APPROACH, Phase.TECHNICAL, Phase.EGRESS):
         appl = applicable_hazards(phase, activity)
         window = windows[phase]
+        phase_in = phase_inputs.get(phase, inputs) if phase_inputs else inputs
         postures: dict[Hazard, HazardPosture] = {}
         phase_notes: list[str] = []
         if activity is ActivityType.CAVE and phase is Phase.TECHNICAL:
             phase_notes.append(CAVE_ISOLATION_NOTE)
 
         for hazard in appl:
-            posture = _evaluate_hazard(hazard, inputs, mission, config, phase, window)
+            posture = _evaluate_hazard(hazard, phase_in, mission, config, phase, window)
             postures[hazard] = posture
             # BLUF keeps the worst phase per hazard (FR-19 preserves each hazard).
             if hazard not in bluf or _severity_rank(posture) > _severity_rank(bluf[hazard]):

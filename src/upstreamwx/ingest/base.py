@@ -8,11 +8,12 @@ The engine never imports a provider directly (FR-13, §12): every source fills a
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Protocol
 
-from ..engine.models import HazardInputs, Mission
+from ..engine.models import HazardInputs, Mission, Phase
+from ..engine.phases import infer_phases
 
 if TYPE_CHECKING:
     from shapely.geometry.base import BaseGeometry
@@ -273,6 +274,79 @@ def build_hazard_series(bundle: IngestBundle) -> HazardSeries | None:
         heat_index_f=heat,
         apparent_temp_f=list(fh.feels_f),
     )
+
+
+def _utc_naive(dt: datetime) -> datetime:
+    """UTC-naive form of a (possibly tz-aware) datetime, to compare with ``hours_dt``."""
+    return dt.astimezone(UTC).replace(tzinfo=None) if dt.tzinfo is not None else dt
+
+
+def _phase_indices(hours_dt: list[datetime], start: datetime, end: datetime) -> list[int]:
+    """Indices of the mission-clock hours falling in a phase window (inclusive bounds).
+
+    Phase windows tile the mission window contiguously (:func:`infer_phases`), so a boundary
+    hour is counted in both adjacent phases; with a max/min reduction that overlap is harmless
+    and keeps each phase conservative.
+    """
+    lo, hi = _utc_naive(start), _utc_naive(end)
+    return [i for i, dt in enumerate(hours_dt) if lo <= dt <= hi]
+
+
+def _sliced_or_base(
+    values: list[float | None], idx: list[int], how: str, base_val: float | None
+) -> float | None:
+    """Reduce ``values`` over ``idx`` (``max``/``min``), falling back to ``base_val``.
+
+    A phase with no covered hour for this field falls back to the window value rather than
+    ``None`` — never a *new* data gap, and conservative (the window value is the worst case).
+    """
+    vals = [values[i] for i in idx if i < len(values) and values[i] is not None]
+    if not vals:
+        return base_val
+    return max(vals) if how == "max" else min(vals)
+
+
+def to_phase_hazard_inputs(
+    bundle: IngestBundle, mission: Mission, base: HazardInputs
+) -> dict[Phase, HazardInputs] | None:
+    """Per-phase feature vectors: slice the *local* hazards to each phase's forecast hours.
+
+    Heat, cold/wet and lightning are point/corridor hazards (§16.1, FR-14a/b) whose posture
+    should reflect conditions *while that phase is underway* — the morning approach and the
+    evening egress are not the midday slot. Each is reduced over the phase's own hours (heat
+    and lightning by max, cold/wet by the coldest apparent temp). **Flash flood is deliberately
+    left at the window-max value**: it is upstream-watershed-routed, so rain that fell upstream
+    earlier arrives in-slot on a travel-time lag — narrowing it to the in-slot hours would
+    *understate* it (the conservative non-negotiable). A phase with no hourly coverage for a
+    field falls back to the window value. Returns ``None`` when no forecast axis was gathered
+    (offline ``inputs`` path / degraded ingest), so :func:`~upstreamwx.engine.assess.assess`
+    uses the single window vector unchanged. Deterministic (NFR-4); the engine still only ever
+    consumes :class:`HazardInputs` — this keeps the display-only ``hazard_series`` boundary
+    (FR-13) intact by constructing real feature vectors here in ingest, not in the engine.
+    """
+    fh = bundle.forecast_hourly
+    if fh is None or not fh.hours_dt:
+        return None
+    hours_dt = fh.hours_dt
+    # Resample the two lightning ensemble sources *separately* onto the mission-clock axis: the
+    # evaluator scores GEFS and REFS on their own cut points and takes the higher tier (FR-19).
+    gefs_tstm = [_cover(dt, bundle.gefs_tstm_hourly, _GEFS_BUCKET_H) for dt in hours_dt]
+    refs_ltng = [_cover(dt, bundle.refs_lightning_hourly, _REFS_BUCKET_H) for dt in hours_dt]
+    heat_hourly = bundle.heat_index_hourly or []
+    feels_hourly = fh.feels_f
+
+    windows, _ = infer_phases(mission)
+    out: dict[Phase, HazardInputs] = {}
+    for phase, (start, end) in windows.items():
+        idx = _phase_indices(hours_dt, start, end)
+        out[phase] = replace(
+            base,
+            heat_index_f=_sliced_or_base(heat_hourly, idx, "max", base.heat_index_f),
+            apparent_temp_f=_sliced_or_base(feels_hourly, idx, "min", base.apparent_temp_f),
+            gefs_p_tstm=_sliced_or_base(gefs_tstm, idx, "max", base.gefs_p_tstm),
+            refs_p_lightning=_sliced_or_base(refs_ltng, idx, "max", base.refs_p_lightning),
+        )
+    return out
 
 
 class Provider(Protocol):
