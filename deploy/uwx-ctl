@@ -33,9 +33,14 @@ HEALTH_URL="http://${BIND_HOST}:${BIND_PORT}/v1/health"
 _run_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 
 _deploy_env() {
-    # Run one of the deploy scripts with this env's config selected.
+    # Run one of the deploy scripts with this env's config selected. Check accessibility AS
+    # ROOT: the release tree is root-owned + group-only (SA-06), so a non-root caller can't
+    # stat it even though the deploy — run via sudo — can.
     local script="$1"; shift
-    [ -x "$SCRIPTS/$script" ] || { echo "error: $SCRIPTS/$script not found — is a release active?" >&2; exit 1; }
+    _run_root test -x "$SCRIPTS/$script" || {
+        echo "error: $SCRIPTS/$script not found — is a release active? (re)install with 'uwx-ctl bootstrap' from a clone." >&2
+        exit 1
+    }
     _run_root env DEPLOY_CONFIG="$CTL_CONFIG" "$SCRIPTS/$script" "$@"
 }
 
