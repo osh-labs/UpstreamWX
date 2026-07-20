@@ -76,6 +76,7 @@ class _Registered:
     key: str
     pid: str | None = None  # owning principal (SA-01/SA-03), None when the gate is off
     last_seen: datetime | None = None  # last time it was VIEWED (SA-03 recently-viewed gate)
+    units: str = "us"  # display system this mission was briefed in; refresh re-renders in it
 
 
 @dataclass(frozen=True)
@@ -207,7 +208,7 @@ class BriefingService:
         spec.ensure_current(now)
         mission = spec.to_mission()
         inputs = spec.to_inputs()
-        key = mission_cache_key(mission, inputs)
+        key = mission_cache_key(mission, inputs, units=spec.units)
         # Explicit inputs are deterministic -> never expire; live briefings are valid
         # for the newest *available* GEFS/REFS cycle (FR-12) — see _cycle_token.
         token = STATIC_TOKEN if inputs is not None else self._cycle_token(now)
@@ -243,13 +244,17 @@ class BriefingService:
             # Haiku framing is always deferred to the streaming /v1/briefing/frame endpoint
             # so the structured posture data is returned immediately without waiting for the
             # LLM call.  The engine result is stored in _result_store for the frame endpoint.
-            briefing = generate_briefing(mission, inputs=inputs, frame=False, generated_at=now)
+            briefing = generate_briefing(
+                mission, inputs=inputs, frame=False, generated_at=now, units=spec.units
+            )
             self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
             self.cache.put(key, briefing, token)
             # Track live, still-in-range missions for the scheduler (FR-12). Deterministic
             # offline briefings need no refresh, so they are not registered.
             if inputs is None and now < _as_utc(mission.window_end):
-                self._register_active(key, mission, now=now, principal_pid=principal_pid)
+                self._register_active(
+                    key, mission, now=now, principal_pid=principal_pid, units=spec.units
+                )
             return self._response(briefing, token, cached=False)
         finally:
             if self._gen_sem is not None:
@@ -262,6 +267,7 @@ class BriefingService:
         *,
         now: datetime,
         principal_pid: str | None = None,
+        units: str = "us",
     ) -> None:
         """Register a live mission for scheduled refresh, capped (FR-12, H-8, SA-01/SA-03).
 
@@ -295,7 +301,8 @@ class BriefingService:
                 )
                 del self._active[soonest]
             self._active[key] = _Registered(
-                mission=mission, frame=False, key=key, pid=principal_pid, last_seen=now
+                mission=mission, frame=False, key=key, pid=principal_pid, last_seen=now,
+                units=units,
             )
 
     def _touch_active(self, key: str, now: datetime) -> None:
@@ -401,12 +408,12 @@ class BriefingService:
             # Soonest-ending first: imminent trips are the most likely to be acted on, so they
             # win the budget if the pass can't reach everyone.
             snapshot = sorted(
-                ((k, reg.mission) for k, reg in self._active.items()),
+                ((k, reg.mission, reg.units) for k, reg in self._active.items()),
                 key=lambda km: _as_utc(km[1].window_end),
             )
 
         regenerated = deferred = skipped_budget = failed = 0
-        for i, (key, mission) in enumerate(snapshot):
+        for i, (key, mission, units) in enumerate(snapshot):
             remaining = len(snapshot) - i
             # Budget counts attempts (successes + failures), so a high-failure pass still stops
             # at the item cap rather than churning the whole registry.
@@ -421,7 +428,7 @@ class BriefingService:
                 deferred = remaining
                 break
             try:
-                briefing = generate_briefing(mission, frame=False, generated_at=now)
+                briefing = generate_briefing(mission, frame=False, generated_at=now, units=units)
                 self._result_store.put(key, briefing.result, size=_estimate_bytes(briefing))
                 self.cache.put(key, briefing, token)
             except Exception:  # noqa: BLE001 — one bad mission must not sink the whole pass (NFR-6)

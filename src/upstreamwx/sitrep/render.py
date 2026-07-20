@@ -22,6 +22,7 @@ from ..engine.models import (
     PhaseAssessment,
 )
 from ..ingest.base import IngestBundle, bundle_data_gaps
+from ..units import Units, localize_units_text, units_for
 from ..watershed import PourpointBasin, UpstreamTrace
 from .sources import build_source_links
 
@@ -94,6 +95,7 @@ def render_md(
     upstream: UpstreamTrace | PourpointBasin | None = None,
     bundle: IngestBundle | None = None,
     generated_at: datetime | None = None,
+    units: str = "us",
 ) -> str:
     """Render a :class:`BriefingResult` to a Markdown SITREP (Appendix A skeleton).
 
@@ -102,7 +104,13 @@ def render_md(
     when in range). Both are optional — the render is complete from the engine result
     alone. ``generated_at`` is the only time-varying input and is rendered in a single
     header line; omit it (the default) for byte-identical golden output.
+
+    ``units`` selects the display system for the physical source-data fields (heat index,
+    apparent temp, wind, convective rate). The default ``"us"`` reproduces the native
+    output byte-for-byte (goldens, NFR-4); ``"metric"`` shows °C / km/h / mm/hr. CAPE
+    (J/kg) is system-agnostic and unchanged.
     """
+    u = units_for(units)
     mission = result.mission
     used_refs = bool(bundle and bundle.refs_in_range)
     lines: list[str] = []
@@ -178,7 +186,7 @@ def render_md(
     lines.append("## SOURCE DATA")
     lines.append("")
     lines.append(f"Threshold config: {result.threshold_version}")
-    _render_source_data(lines, bundle)
+    _render_source_data(lines, bundle, u)
 
     # ---- Notes ------------------------------------------------------------------
     if result.notes:
@@ -203,7 +211,10 @@ def render_md(
     lines.append("")
     lines.append(DISCLAIMER)
 
-    return "\n".join(lines) + "\n"
+    # Localize the engine-authored driver/summary prose for metric display; a no-op for US,
+    # so golden output is byte-identical (NFR-4). The numeric source-data lines above are
+    # already converted, so the °F/mph patterns never match them (no double conversion).
+    return localize_units_text("\n".join(lines) + "\n", u)
 
 
 def _render_phase(lines: list[str], phase_assessment: PhaseAssessment) -> None:
@@ -261,7 +272,7 @@ def _watershed_summary(
     )
 
 
-def _render_source_data(lines: list[str], bundle: IngestBundle | None) -> None:
+def _render_source_data(lines: list[str], bundle: IngestBundle | None, u: Units) -> None:
     if bundle is None:
         lines.append("")
         lines.append("Source field detail unavailable (rendered from engine result only).")
@@ -283,7 +294,9 @@ def _render_source_data(lines: list[str], bundle: IngestBundle | None) -> None:
     lines.append(f"GEFS ensemble (upstream domain, cycle {bundle.gefs_cycle or 'n/a'}):")
     lines.append(f"- P(precip/thunder): {_pct(bundle.gefs_p_precip)}")
     lines.append(f"- P(thunderstorm): {_pct(bundle.gefs_p_tstm)}")
-    lines.append(f"- Convective rate: {_num(bundle.convective_rate_in_per_hr, 'in/hr')}")
+    lines.append(
+        f"- Convective rate: {_num(u.rate(bundle.convective_rate_in_per_hr), u.rate_unit)}"
+    )
     lines.append(f"- CAPE: {_num(bundle.cape_jkg, 'J/kg')}")
 
     if bundle.refs_in_range:
@@ -297,9 +310,9 @@ def _render_source_data(lines: list[str], bundle: IngestBundle | None) -> None:
 
     lines.append("")
     lines.append("Derived fields (Open-Meteo):")
-    lines.append(f"- Heat index: {_num(bundle.heat_index_f, '°F')}")
-    lines.append(f"- Apparent temp: {_num(bundle.apparent_temp_f, '°F')}")
-    lines.append(f"- Wind: {_num(bundle.wind_mph, 'mph')}")
+    lines.append(f"- Heat index: {_num(u.temp(bundle.heat_index_f), u.temp_unit)}")
+    lines.append(f"- Apparent temp: {_num(u.temp(bundle.apparent_temp_f), u.temp_unit)}")
+    lines.append(f"- Wind: {_num(u.wind(bundle.wind_mph), u.wind_unit)}")
     lines.append(f"- Measurable window precip: {_ynu(bundle.measurable_precip)}")
     lines.append(f"- Antecedent precip (24–72 h): {_ynu(bundle.antecedent_precip_24_72h)}")
 

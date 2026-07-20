@@ -31,6 +31,7 @@ from ..engine.models import (
 )
 from ..engine.thresholds import ThresholdConfig, load_thresholds
 from ..ingest.base import IngestBundle, bundle_data_gaps
+from ..units import Units, localize_units_text, units_for
 from ..watershed import PourpointBasin, UpstreamTrace
 from .frame import _INSERT_BEFORE, _SUMMARY_HEADING
 from .hazard_copy import HAZARD_LOGIC
@@ -195,39 +196,54 @@ def _r(values: list[float | None]) -> list[float | None]:
     return [None if v is None else round(v, 1) for v in values]
 
 
-def _heat_bands(config: ThresholdConfig) -> list[dict]:
-    """NWS Heat Index category bands (°F), cut points read from heat.yaml (FR-15, FR-20a)."""
+def _tband(u: Units, lo: float, hi: float) -> tuple[float, float]:
+    """Convert a (°F) band edge pair to the display system, rounded for clean plotting.
+
+    US is native so the edges are returned unchanged (round to 1 dp leaves integer cut
+    points intact); metric returns the °C equivalents (NFR-4 for the US path).
+    """
+    return round(u.temp(lo), 1), round(u.temp(hi), 1)
+
+
+def _heat_bands(config: ThresholdConfig, u: Units) -> list[dict]:
+    """NWS Heat Index category bands, cut points read from heat.yaml (FR-15, FR-20a)."""
     cats = config.heat["categories"]
+    caution, ext_caution, danger, ext_danger = (
+        float(cats["caution_min"]), float(cats["extreme_caution_min"]),
+        float(cats["danger_min"]), float(cats["extreme_danger_min"]),
+    )
+    b1, b2 = _tband(u, caution, ext_caution)
+    b3, b4 = _tband(u, danger, ext_danger)
+    axis_max = round(u.temp(_HEAT_AXIS_MAX_F), 1)
     return [
-        {"from": float(cats["caution_min"]), "to": float(cats["extreme_caution_min"]),
-         "class": "heat-caution", "label": "Caution"},
-        {"from": float(cats["extreme_caution_min"]), "to": float(cats["danger_min"]),
-         "class": "heat-ext-caution", "label": "Extreme Caution"},
-        {"from": float(cats["danger_min"]), "to": float(cats["extreme_danger_min"]),
-         "class": "heat-danger", "label": "Danger"},
-        {"from": float(cats["extreme_danger_min"]), "to": _HEAT_AXIS_MAX_F,
-         "class": "heat-ext-danger", "label": "Extreme Danger"},
+        {"from": b1, "to": b2, "class": "heat-caution", "label": "Caution"},
+        {"from": b2, "to": b3, "class": "heat-ext-caution", "label": "Extreme Caution"},
+        {"from": b3, "to": b4, "class": "heat-danger", "label": "Danger"},
+        {"from": b4, "to": axis_max, "class": "heat-ext-danger", "label": "Extreme Danger"},
     ]
 
 
-def _cold_bands(config: ThresholdConfig) -> list[dict]:
-    """Cold/wet apparent-temp tier bands (°F), cut points read from cold_wet.yaml (FR-20a).
+def _cold_bands(config: ThresholdConfig, u: Units) -> list[dict]:
+    """Cold/wet apparent-temp tier bands, cut points read from cold_wet.yaml (FR-20a).
 
     Coldest band wins in the engine; the graph shades warmest-first-up so ``from`` < ``to``.
     """
     b = config.cold_wet["apparent_temp"]
+    axis_min = round(u.temp(_COLD_AXIS_MIN_F), 1)
+    extreme_max, high_max, elevated_max = (
+        round(u.temp(float(b["extreme_max"])), 1),
+        round(u.temp(float(b["high_max"])), 1),
+        round(u.temp(float(b["elevated_max"])), 1),
+    )
     return [
-        {"from": _COLD_AXIS_MIN_F, "to": float(b["extreme_max"]),
-         "class": "sev-extreme", "label": "Extreme"},
-        {"from": float(b["extreme_max"]), "to": float(b["high_max"]),
-         "class": "sev-high", "label": "High"},
-        {"from": float(b["high_max"]), "to": float(b["elevated_max"]),
-         "class": "sev-elevated", "label": "Elevated"},
+        {"from": axis_min, "to": extreme_max, "class": "sev-extreme", "label": "Extreme"},
+        {"from": extreme_max, "to": high_max, "class": "sev-high", "label": "High"},
+        {"from": high_max, "to": elevated_max, "class": "sev-elevated", "label": "Elevated"},
     ]
 
 
 def _hazard_series_block(
-    hazard: Hazard, bundle: IngestBundle | None, config: ThresholdConfig
+    hazard: Hazard, bundle: IngestBundle | None, config: ThresholdConfig, u: Units
 ) -> dict | None:
     """Per-hazard display series for the PWA hazard graphs (FR-6), or None when unavailable.
 
@@ -255,20 +271,22 @@ def _hazard_series_block(
         }
     if hazard is Hazard.HEAT:
         return {
-            "primary": {"label": "Heat index", "unit": "°F", "values": _r(hs.heat_index_f)},
+            "primary": {"label": "Heat index", "unit": u.temp_unit,
+                        "values": _r([u.temp(v) for v in hs.heat_index_f])},
             "secondary": None,
-            "bands": _heat_bands(config),
+            "bands": _heat_bands(config, u),
         }
     # COLD_WET
     return {
-        "primary": {"label": "Apparent temp", "unit": "°F", "values": _r(hs.apparent_temp_f)},
+        "primary": {"label": "Apparent temp", "unit": u.temp_unit,
+                    "values": _r([u.temp(v) for v in hs.apparent_temp_f])},
         "secondary": None,
-        "bands": _cold_bands(config),
+        "bands": _cold_bands(config, u),
     }
 
 
 def _hazard_detail(
-    result: BriefingResult, bundle: IngestBundle | None, config: ThresholdConfig
+    result: BriefingResult, bundle: IngestBundle | None, config: ThresholdConfig, u: Units
 ) -> list[dict]:
     out: list[dict] = []
     for hazard in _HAZARD_ORDER:
@@ -281,10 +299,12 @@ def _hazard_detail(
                 "label": p.severity_label,
                 "severity_class": severity_class(p),
                 "confidence": p.confidence.label if p.confidence is not None else "Moderate",
-                "drivers": list(p.drivers),
-                "logic": HAZARD_LOGIC.get(hazard, ""),
-                "assumptions": list(p.notes),
-                "series": _hazard_series_block(hazard, bundle, config),
+                # Engine-authored driver/logic/assumption prose embeds native units; localize
+                # for metric display only (US = unchanged, NFR-4). Never re-read by the engine.
+                "drivers": [localize_units_text(d, u) for d in p.drivers],
+                "logic": localize_units_text(HAZARD_LOGIC.get(hazard, ""), u),
+                "assumptions": [localize_units_text(n, u) for n in p.notes],
+                "series": _hazard_series_block(hazard, bundle, config, u),
             }
         )
     return out
@@ -313,9 +333,12 @@ def _watershed(
         geometry = mapping(upstream.polygon)
         area_km2 = upstream.area_km2
     excluded = bundle.roc_excluded if bundle is not None else None
+    # Both unit companions are always emitted; the PWA picks by the briefing's `units`
+    # (area_sq_mi kept for the frozen contract, area_km2 added for the metric display).
     return {
         "huc12": _huc_ids(upstream),
         "area_sq_mi": _area_sq_mi(area_km2),
+        "area_km2": round(area_km2, 1),
         "geometry": geometry,
         "excluded_geometry": mapping(excluded) if excluded is not None else None,
     }
@@ -349,7 +372,7 @@ def _laoc(bundle: IngestBundle | None, mission) -> dict | None:
     }
 
 
-def _metrics(bundle: IngestBundle | None) -> list[dict]:
+def _metrics(bundle: IngestBundle | None, u: Units) -> list[dict]:
     fh = bundle.forecast_hourly if bundle is not None else None
 
     def mx(arr: list | None) -> float | None:
@@ -374,14 +397,15 @@ def _metrics(bundle: IngestBundle | None) -> list[dict]:
         return {"label": label, "icon": icon, "value": value, "unit": unit, "sub": sub}
 
     return [
-        card("Temp", "heat", s(temp), "°F", f"Feels {s(feels)}°"),
-        card("Wind", "cold_wet", s(wind), "mph", f"Gust {s(gust)}"),
-        card("Precip", "flash_flood", s(precip), "%", f"{s(qpf, '{:.1f}')} in"),
+        card("Temp", "heat", s(u.temp(temp)), u.temp_unit, f"Feels {s(u.temp(feels))}°"),
+        card("Wind", "cold_wet", s(u.wind(wind)), u.wind_unit, f"Gust {s(u.wind(gust))}"),
+        card("Precip", "flash_flood", s(precip), "%",
+             f"{s(u.depth(qpf), u.depth_fmt)} {u.depth_unit}"),
         card("T-storm", "lightning", s(tstm), "%", "GEFS P(tstm)"),
     ]
 
 
-def _risk_inputs(bundle: IngestBundle | None) -> dict:
+def _risk_inputs(bundle: IngestBundle | None, u: Units) -> dict:
     """Scalar engine-input fields for the Forecast view's Risk Analysis section (FR-20).
 
     These are the raw probability and physical-parameter inputs the deterministic engine
@@ -403,8 +427,10 @@ def _risk_inputs(bundle: IngestBundle | None) -> dict:
         "refs_p_lightning": pct(bundle.refs_p_lightning) if bundle.refs_in_range else None,
         "refs_cycle": bundle.refs_cycle,
         "cape_jkg": round(bundle.cape_jkg) if bundle.cape_jkg is not None else None,
+        # Value converted to the display system (in/hr → mm/hr in metric); the frontend
+        # supplies the matching unit label from the briefing's `units`. CAPE is unit-agnostic.
         "convective_rate_in_per_hr": (
-            round(bundle.convective_rate_in_per_hr, 3)
+            round(u.rate(bundle.convective_rate_in_per_hr), 3)
             if bundle.convective_rate_in_per_hr is not None
             else None
         ),
@@ -434,8 +460,13 @@ def _data_quality(bundle: IngestBundle | None) -> dict:
     }
 
 
-def _forecast(bundle: IngestBundle | None) -> tuple[dict, dict, dict]:
-    """Return (forecast_hourly table, temp_series, wind_series); empty under degradation."""
+def _forecast(bundle: IngestBundle | None, u: Units) -> tuple[dict, dict, dict]:
+    """Return (forecast_hourly table, temp_series, wind_series); empty under degradation.
+
+    Row labels carry the display unit (``Temp °C`` / ``Wind km/h`` in metric) and every
+    value is converted to match. The raw ``temp_series``/``wind_series`` arrays feed the
+    Forecast-tab charts and are converted too; the US path is byte-identical (NFR-4).
+    """
     fh = bundle.forecast_hourly if bundle is not None else None
     if fh is None:
         return {"hours": [], "rows": []}, {"air": [], "feels": []}, {"wind": [], "gust": []}
@@ -443,20 +474,31 @@ def _forecast(bundle: IngestBundle | None) -> tuple[dict, dict, dict]:
     def row(label: str, arr: list, fmt: str = "{:.0f}") -> dict:
         return {"label": label, "values": ["" if v is None else fmt.format(v) for v in arr]}
 
+    def conv(arr: list, fn) -> list:
+        # Round metric conversions for clean chart data; US returns the native value.
+        return [None if v is None else (round(w, 1) if (w := fn(v)) is not None else None)
+                for v in arr]
+
+    temp_f = conv(fh.temp_f, u.temp)
+    feels_f = conv(fh.feels_f, u.temp)
+    wind_mph = conv(fh.wind_mph, u.wind)
+    gust_mph = conv(fh.gust_mph, u.wind)
+    qpf = conv(fh.qpf_in, u.depth)
+
     forecast_hourly = {
         "hours": list(fh.hours),
         "rows": [
             {"label": "Sky", "values": list(fh.sky)},
-            row("Temp °F", fh.temp_f),
-            row("Feels °F", fh.feels_f),
-            row("Wind mph", fh.wind_mph),
-            row("Gust mph", fh.gust_mph),
+            row(f"Temp {u.temp_unit}", temp_f),
+            row(f"Feels {u.temp_unit}", feels_f),
+            row(f"Wind {u.wind_unit}", wind_mph),
+            row(f"Gust {u.wind_unit}", gust_mph),
             row("Precip %", fh.precip_pct),
-            row("QPF in", fh.qpf_in, "{:.1f}"),
+            row(f"QPF {u.depth_unit}", qpf, u.depth_fmt),
         ],
     }
-    temp_series = {"air": list(fh.temp_f), "feels": list(fh.feels_f)}
-    wind_series = {"wind": list(fh.wind_mph), "gust": list(fh.gust_mph)}
+    temp_series = {"air": temp_f, "feels": feels_f}
+    wind_series = {"wind": wind_mph, "gust": gust_mph}
     return forecast_hourly, temp_series, wind_series
 
 
@@ -519,14 +561,18 @@ def to_structured(gen: GeneratedBriefing, *, cached: bool, cache_cycle: str) -> 
     mission = result.mission
     upstream = bundle.upstream if bundle is not None else None
     used_refs = bool(bundle is not None and bundle.refs_in_range)
+    # Display units for this briefing (FR-9). Display-only: selects labels/values for the
+    # structured output; the engine result is identical either way (FR-13, NFR-4).
+    u = units_for(gen.units)
 
-    forecast_hourly, temp_series, wind_series = _forecast(bundle)
-    risk_inputs = _risk_inputs(bundle)
+    forecast_hourly, temp_series, wind_series = _forecast(bundle, u)
+    risk_inputs = _risk_inputs(bundle, u)
     # Threshold config for the heat/cold display bands (cut points from the YAML, FR-20a); the
     # engine already assessed with these versions (result.threshold_version). Display only.
     config = load_thresholds()
     return {
         "markdown": gen.markdown,
+        "units": u.system,
         "mission": {
             "name": mission.name,
             "activity": mission.activity_type.value,
@@ -557,10 +603,10 @@ def to_structured(gen: GeneratedBriefing, *, cached: bool, cache_cycle: str) -> 
         "data_quality": _data_quality(bundle),
         "summary": _summary(gen.markdown, gen.framed),
         "bluf": _bluf(result),
-        "metrics": _metrics(bundle),
+        "metrics": _metrics(bundle, u),
         "phases": [_phase(pa) for pa in result.phases],
         "timeline": _timeline(result),
-        "hazard_detail": _hazard_detail(result, bundle, config),
+        "hazard_detail": _hazard_detail(result, bundle, config, u),
         "forecast_hourly": forecast_hourly,
         "temp_series": temp_series,
         "wind_series": wind_series,

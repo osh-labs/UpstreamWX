@@ -104,6 +104,12 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="YAML HazardInputs to render from (offline; skips live ingest)",
     )
+    p.add_argument(
+        "--units",
+        choices=["us", "metric"],
+        default="us",
+        help="display unit system for the rendered briefing (default: us customary)",
+    )
     p.add_argument("--out", type=Path, default=None, help="write .md here (default: stdout)")
     frame_group = p.add_mutually_exclusive_group()
     frame_group.add_argument(
@@ -123,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
 
     inputs = _load_inputs(args.inputs) if args.inputs is not None else None
     briefing = generate_briefing(
-        mission, inputs=inputs, frame=args.frame, generated_at=datetime.now(UTC)
+        mission, inputs=inputs, frame=args.frame, generated_at=datetime.now(UTC), units=args.units
     )
     for warning in briefing.warnings:
         print(f"warning: {warning}", file=sys.stderr)
