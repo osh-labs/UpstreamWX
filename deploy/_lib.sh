@@ -17,23 +17,28 @@ ok()   { if _have_tty; then printf '\033[1;32m  ✓\033[0m %s\n' "$*"; else prin
 warn() { if _have_tty; then printf '\033[1;33m  ! \033[0m%s\n' "$*" >&2; else printf '  ! %s\n' "$*" >&2; fi; }
 die()  { if _have_tty; then printf '\033[1;31merror:\033[0m %s\n' "$*" >&2; else printf 'error: %s\n' "$*" >&2; fi; exit 1; }
 
-# Load the deploy config if present, then let real environment variables win (so
-# `DEPLOY_BRANCH=foo ./deploy.sh` overrides the file). Defaults below cover a fresh
-# checkout where the config file hasn't been created yet.
+# Load the deploy config, then let real environment variables win (so
+# `DEPLOY_BRANCH=foo ./deploy.sh` overrides the file).
 #
-# Which file? `config.env` by default; set DEPLOY_CONFIG to point at another (e.g.
-# `sudo DEPLOY_CONFIG=deploy/config.staging.env deploy/deploy.sh v0.5.0`) so ONE set of
-# scripts drives both staging and production, each with its own service name / port /
-# paths (docs/deployment-workflow.md).
+# DEPLOY_CONFIG is REQUIRED (issue #146): with it unset the scripts used to fall back to
+# deploy/config.env — i.e. PROD defaults — so one forgotten env var silently pointed a
+# staging box at prod's service name / data dir (the 2026-07-20 staging outage). An
+# environment is now always an explicit choice:
+#   sudo DEPLOY_CONFIG=deploy/config.staging.env deploy/bootstrap.sh
+#   sudo DEPLOY_CONFIG=/etc/upstreamwx-staging/deploy.conf deploy/deploy.sh main
+# (uwx-ctl bakes the persisted config path in and sets DEPLOY_CONFIG for you.)
 load_config() {
-    local cfg="${DEPLOY_CONFIG:-$DEPLOY_DIR/config.env}"
-    if [ -n "${DEPLOY_CONFIG:-}" ] && [ ! -f "$cfg" ]; then
-        die "DEPLOY_CONFIG=$cfg not found"
+    if [ -z "${DEPLOY_CONFIG:-}" ]; then
+        die "DEPLOY_CONFIG is not set — refusing to fall back to prod defaults (issue #146).
+       Select the environment explicitly, e.g.:
+         sudo DEPLOY_CONFIG=$DEPLOY_DIR/config.env         $0   # production
+         sudo DEPLOY_CONFIG=$DEPLOY_DIR/config.staging.env $0   # staging
+       or use this box's installed wrapper (uwx-ctl deploy / bootstrap), which bakes the config in."
     fi
-    if [ -f "$cfg" ]; then
-        # shellcheck disable=SC1090
-        set -a; source "$cfg"; set +a
-    fi
+    local cfg="$DEPLOY_CONFIG"
+    [ -f "$cfg" ] || die "DEPLOY_CONFIG=$cfg not found"
+    # shellcheck disable=SC1090
+    set -a; source "$cfg"; set +a
     : "${DEPLOY_REPO_URL:=https://github.com/osh-labs/upstreamwx.git}"
     : "${DEPLOY_BRANCH:=main}"
     : "${DEPLOY_APP_DIR:=/opt/upstreamwx}"
@@ -105,6 +110,87 @@ load_config() {
     # turns it on after certbot has issued the cert. The SA-01 Secure session cookie is inert
     # without live HTTPS, so a public release must not ship without it.
     : "${DEPLOY_REQUIRE_HTTPS:=0}"
+}
+
+# ============================================================================
+# Issue #146 — hard blocks against cross-environment accidents
+# ============================================================================
+# One host, one environment (unless deliberately opted out). These guards run BEFORE
+# anything is written, so a mis-selected config exits non-zero with zero changes.
+
+# check_install_conflicts — refuse to proceed when the host already carries an UpstreamWX
+# install whose service/app/data/env paths DIFFER from the loaded config. This is what turns
+# "deploy.sh with the wrong config" from a silent second install into a hard stop. Escape
+# hatch: DEPLOY_ALLOW_COEXIST=1 (a box deliberately running staging AND prod side by side —
+# you own keeping service names, ports, and every path distinct).
+check_install_conflicts() {
+    if [ "${DEPLOY_ALLOW_COEXIST:-0}" = "1" ]; then
+        warn "DEPLOY_ALLOW_COEXIST=1 — skipping the one-install-per-host conflict check (#146)"
+        return 0
+    fi
+    local conflicts=() f name d
+    # systemd units: any upstreamwx*.service that is not THIS config's service.
+    for f in /etc/systemd/system/upstreamwx*.service; do
+        [ -e "$f" ] || continue
+        name="$(basename "$f" .service)"
+        [ "$name" = "$DEPLOY_SERVICE" ] || conflicts+=("unit $f (service '$name' != '$DEPLOY_SERVICE')")
+    done
+    # App / data / env roots: any upstreamwx* entry that is not THIS config's path. The
+    # checkout the scripts run from ($REPO_DIR) is exempt — a rebuild clone is not an install.
+    for d in /opt/upstreamwx*; do
+        [ -e "$d" ] || continue
+        [ "$d" = "$DEPLOY_APP_DIR" ] || [ "$d" = "$REPO_DIR" ] \
+            || conflicts+=("app dir $d (config wants $DEPLOY_APP_DIR)")
+    done
+    for d in /var/lib/upstreamwx*; do
+        [ -e "$d" ] || continue
+        [ "$d" = "$DEPLOY_DATA_DIR" ] || conflicts+=("data dir $d (config wants $DEPLOY_DATA_DIR)")
+    done
+    for d in /etc/upstreamwx*; do
+        [ -e "$d" ] || continue
+        [ "$d" = "$DEPLOY_ENV_DIR" ] || conflicts+=("env dir $d (config wants $DEPLOY_ENV_DIR)")
+    done
+    [ "${#conflicts[@]}" -eq 0 ] && return 0
+    warn "conflicting UpstreamWX install(s) already on this host (#146):"
+    local c; for c in "${conflicts[@]}"; do warn "  - $c"; done
+    die "refusing to proceed: this host carries an install that does not match DEPLOY_CONFIG=$DEPLOY_CONFIG.
+       Either you selected the wrong config, or stale cruft must be removed first, e.g.:
+         sudo systemctl disable --now <service>; sudo rm -rf <app dir> <data dir> <env dir>
+         sudo rm -f /etc/systemd/system/<service>.service && sudo systemctl daemon-reload
+       To deliberately run two environments on one box, set DEPLOY_ALLOW_COEXIST=1 in BOTH
+       configs (and keep service names, ports, and all paths distinct — including DEPLOY_CTL_NAME)."
+}
+
+# check_data_dir_owner — refuse a data dir owned by a different account than DEPLOY_USER.
+# A cross-owned data dir is the direct cause of the 2026-07-20 briefing 500s (PermissionError
+# on another install's cache root); writing into it can also silently chown live data.
+check_data_dir_owner() {
+    [ -d "$DEPLOY_DATA_DIR" ] || return 0
+    local owner
+    owner="$(stat -c %U "$DEPLOY_DATA_DIR" 2>/dev/null || echo '?')"
+    # root is tolerated: bootstrap's install -d re-owns it to DEPLOY_USER. Anything else —
+    # another env's account, or a bare uid from a deleted user — is a hard stop.
+    if [ "$owner" = "$DEPLOY_USER" ] || [ "$owner" = "root" ]; then
+        return 0
+    fi
+    die "data dir $DEPLOY_DATA_DIR exists but is owned by '$owner', not DEPLOY_USER='$DEPLOY_USER' (#146).
+       This is another install's (or an orphaned) data dir — wrong config selected, or remove it:
+         sudo rm -rf $DEPLOY_DATA_DIR"
+}
+
+# sanitize_env_file_data_dir — comment out any ACTIVE UPSTREAMWX_DATA_DIR line in the runtime
+# env file. The unit pins the data dir at exec time (see deploy/systemd/upstreamwx-api.service);
+# a value in the env file is at best redundant and at worst the stale prod path that broke
+# staging (systemd's EnvironmentFile= overrides Environment=, so a unit-level pin alone cannot
+# defend against it). bootstrap never clobbers a live env file, so this is the one migration
+# it performs in place.
+sanitize_env_file_data_dir() {
+    [ -f "$DEPLOY_ENV_FILE" ] || return 0
+    grep -qE '^[[:space:]]*UPSTREAMWX_DATA_DIR=' "$DEPLOY_ENV_FILE" || return 0
+    warn "env file $DEPLOY_ENV_FILE carries an active UPSTREAMWX_DATA_DIR — commenting it out"
+    warn "  (the systemd unit pins the data dir to DEPLOY_DATA_DIR=$DEPLOY_DATA_DIR at exec time)"
+    sed -i 's|^[[:space:]]*\(UPSTREAMWX_DATA_DIR=.*\)$|# MIGRATED by bootstrap (unit pins the data dir): \1|' \
+        "$DEPLOY_ENV_FILE"
 }
 
 # render_template SRC DEST — substitute the __TOKEN__ placeholders into DEST.

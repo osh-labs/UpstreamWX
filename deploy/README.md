@@ -75,8 +75,29 @@ cp deploy/config.env.example deploy/config.env
 nano deploy/config.env          # optional: override DEPLOY_BRANCH, server names, paths, etc.
 
 # Provision: system packages, user, dirs, systemd + nginx, venv, first start.
-sudo deploy/bootstrap.sh
+# DEPLOY_CONFIG is REQUIRED (issue #146) — the environment is always an explicit choice;
+# with it unset the scripts refuse to run rather than silently applying prod defaults.
+sudo DEPLOY_CONFIG=deploy/config.env deploy/bootstrap.sh
 ```
+
+### One install per host (issue #146)
+
+`bootstrap.sh` and `deploy.sh` **hard-block** before writing anything when:
+
+- **`DEPLOY_CONFIG` is unset** — there is no default environment. This is what once pointed
+  a staging box at prod defaults (stray `upstreamwx-api` service + prod data dir → 500s).
+- **A differently-named install already exists** — any `upstreamwx*` systemd unit,
+  `/opt/upstreamwx*`, `/var/lib/upstreamwx*`, or `/etc/upstreamwx*` entry that doesn't match
+  the loaded config is listed and the run exits non-zero. Escape hatch for a deliberate
+  two-env box: `DEPLOY_ALLOW_COEXIST=1` in **both** configs (keep every name/port/path
+  distinct, including `DEPLOY_CTL_NAME`).
+- **The target data dir is owned by another account** — a cross-owned `DEPLOY_DATA_DIR` is
+  another install's cache root (the direct cause of the 2026-07-20 briefing 500s).
+
+On an existing env file, bootstrap performs one in-place migration: an **active**
+`UPSTREAMWX_DATA_DIR=` line is commented out (systemd's `EnvironmentFile=` overrides
+`Environment=`, so a stale value there would defeat the unit; the unit now pins the data dir
+inside `ExecStart` via `/usr/bin/env`, which nothing in the env file can override).
 
 `bootstrap.sh` sets up the **atomic-release layout** under `/opt/upstreamwx` (SA-06): a
 root-owned git **mirror** (`repo/`), a **`releases/`** dir, and the **`current`** symlink the
@@ -185,8 +206,9 @@ uwx-ctl deploy v0.6.1      # a specific older tag/SHA
 ```
 
 > Without the wrapper (e.g. before the first bootstrap that installs it), the underlying form
-> is `sudo DEPLOY_CONFIG=<config> <app_dir>/current/deploy/deploy.sh [ref]` — **staging always
-> needs `DEPLOY_CONFIG`**; prod works without it (prod paths are the defaults).
+> is `sudo DEPLOY_CONFIG=<config> <app_dir>/current/deploy/deploy.sh [ref]` — **every
+> environment needs an explicit `DEPLOY_CONFIG`**, prod included (issue #146; there is no
+> silent default).
 
 ---
 
@@ -242,12 +264,12 @@ cp deploy/config.env.example deploy/config.env
 # DEPLOY_BRANCH="main"; DEPLOY_APP_SERVER_NAME="<node>.<tailnet>.ts.net"; and
 # DEPLOY_LANDING_SERVER_NAME="" so staging is app-only (no public apex landing).
 nano deploy/config.env
-sudo deploy/bootstrap.sh
+sudo DEPLOY_CONFIG=deploy/config.env deploy/bootstrap.sh
 sudo nano /etc/upstreamwx/upstreamwx.env     # NWS UA identifying staging; ANTHROPIC_API_KEY optional
 sudo systemctl restart upstreamwx-api
 
-# Each release candidate (staging tracks main):
-sudo deploy/deploy.sh                          # ref defaults to DEPLOY_BRANCH=main
+# Each release candidate (staging tracks main) — or just `uwx-ctl deploy`:
+sudo DEPLOY_CONFIG=deploy/config.env deploy/deploy.sh    # ref defaults to DEPLOY_BRANCH=main
 curl -s http://127.0.0.1:8000/v1/health        # release should show main's short SHA
 ```
 
