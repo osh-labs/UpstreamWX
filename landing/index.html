@@ -24,6 +24,15 @@
     <title>UpstreamWX — Weather Briefing for Caving &amp; Canyoneering</title>
     <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="icons/icon.svg" />
+    <!-- Albert Sans / Ubuntu Mono are vendored same-origin (docs/font-vendoring-provenance.md,
+         same SA-05 rationale as the app's map libraries). Preload the primary body face. -->
+    <link
+      rel="preload"
+      href="vendor/fonts/albert-sans-v4-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="styles/tokens.css" />
     <link rel="stylesheet" href="styles/landing.css" />
   </head>

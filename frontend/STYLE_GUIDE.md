@@ -183,13 +183,20 @@ hazard detail.
 
 ## 4. Typography
 
-System font stack (no webfont dependency — installs and renders offline).
-Tabular/monospace numerals for all weather values so columns align.
+**Albert Sans** (body + headings) and **Ubuntu Mono** (all monospace) — vendored,
+exact-pinned webfonts served same-origin (`frontend/vendor/fonts/`, `landing/vendor/fonts/`;
+same self-hosting rationale as the map libraries, SA-05: no CDN dependency, precached by
+the service worker, installs and renders offline). Albert Sans ships as a single variable
+font (weight range 100–900, `@font-face` in `tokens.css`) so the type scale's
+non-multiple-of-100 weights (620, 650) render at their exact value rather than snapping to
+a static face; Ubuntu Mono ships as static 400/700 faces. Both fall back to the system stack
+below if a font file fails to load. Tabular/monospace numerals for all weather values so
+columns align.
 
 | Token | Stack |
 |---|---|
-| `--font-sans` | `system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif` |
-| `--font-mono` | `ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace` |
+| `--font-sans` | `"Albert Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif` |
+| `--font-mono` | `"Ubuntu Mono", ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace` |
 
 ### Type scale
 
