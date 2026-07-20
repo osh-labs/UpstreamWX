@@ -712,26 +712,29 @@ function hideBusyBanner() {
 
 /* ── Small render helpers ──────────────────────────────────────────── */
 function postureChip(label, sevClass, big = false) {
-  return `<span class="posture-chip ${sevClass} ${big ? "is-lg" : ""}">${esc(label)}</span>`;
+  // A slow opacity pulse draws the eye to the worst posture, but only on the
+  // large overall/hero chip and only for the top two tiers — restraint keeps the
+  // "quiet chrome, loud severity" balance and avoids a screen of blinking pills.
+  // Disabled entirely under prefers-reduced-motion (CSS).
+  const live = big && (sevClass === "sev-extreme" || sevClass === "sev-high") ? " is-live" : "";
+  return `<span class="posture-chip ${sevClass}${live} ${big ? "is-lg" : ""}">${esc(label)}</span>`;
 }
 
 function confidenceTag(level, big = false) {
-  // SVG signal-bar style: three bars whose tops share a single diagonal line,
-  // so bar i's right top and bar (i+1)'s left top are continuous (no jump).
-  // Low = 1 filled, moderate = 2, high = all 3 (FR-36).
+  // Signal-bar style: three discrete bars of ascending height (short→tall), the
+  // filled count reading confidence like a signal-strength meter. Low = 1 filled,
+  // moderate = 2, high = all 3 (FR-36). Fill is *neutral* (never a severity hue):
+  // confidence is shape, not color, so it can't be mistaken for a hazard tier.
   const k = String(level).toLowerCase();
   const activeCount = k === "low" ? 1 : k === "moderate" ? 2 : 3;
-  const vW = 100, vH = 18, gap = 4;
+  const vW = 100, vH = 18, gap = 6;
   const bW = (vW - 2 * gap) / 3;
-  // Diagonal: y = y0 × (vW − x) / vW, passing from y0 at x=0 to 0 at x=vW.
-  // y0=14 gives bar 0 a 4 px minimum height; bar 2's right edge reaches full vH.
-  const y0 = 14;
-  const diagY = (x) => y0 * (vW - x) / vW;
+  const heights = [0.5, 0.75, 1]; // ascending: taller bar = stronger signal
   const bars = [0, 1, 2].map((i) => {
-    const xL = i * (bW + gap), xR = xL + bW;
-    const yTL = diagY(xL), yTR = Math.max(0, diagY(xR));
-    const fill = i < activeCount ? "var(--sev-high)" : "var(--color-surface-3)";
-    return `<polygon points="${xL.toFixed(1)},${vH} ${xR.toFixed(1)},${vH} ${xR.toFixed(1)},${yTR.toFixed(1)} ${xL.toFixed(1)},${yTL.toFixed(1)}" fill="${fill}"/>`;
+    const xL = i * (bW + gap);
+    const h = vH * heights[i], yT = vH - h;
+    const fill = i < activeCount ? "var(--color-text-secondary)" : "var(--color-surface-3)";
+    return `<rect x="${xL.toFixed(1)}" y="${yT.toFixed(1)}" width="${bW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${fill}"/>`;
   }).join("");
   return `<div class="confidence ${big ? "is-lg" : ""}" title="${esc(level)} confidence">
     <svg class="confidence__bars" viewBox="0 0 ${vW} ${vH}" aria-hidden="true">${bars}</svg>
@@ -740,6 +743,20 @@ function confidenceTag(level, big = false) {
 }
 
 /* ── 7.1/7.3 Header + mission card ─────────────────────────────────── */
+// Lift the header with a soft drop-shadow once the view body scrolls, so the
+// sticky chrome separates from the content beneath it. Idempotent per state.
+let _headerScrolled = false;
+function setHeaderScrolled(on) {
+  if (on === _headerScrolled) return;
+  _headerScrolled = on;
+  document.getElementById("header")?.classList.toggle("is-scrolled", on);
+}
+function initHeaderScrollShadow() {
+  const main = document.querySelector("main");
+  if (!main) return;
+  main.addEventListener("scroll", () => setHeaderScrolled(main.scrollTop > 4), { passive: true });
+}
+
 function renderHeader(b) {
   const m = b.mission;
   const actSrc = m.activity === "cave" ? "icons/cave.png" : "icons/canyon.png";
@@ -753,7 +770,15 @@ function renderHeader(b) {
       ${icon("reload", "header-reload__icon")}
     </button>
   `;
-  document.getElementById("header-reload").addEventListener("click", () => window.location.reload());
+  const reloadBtn = document.getElementById("header-reload");
+  reloadBtn.addEventListener("click", () => {
+    // Spin the icon for a beat to acknowledge the tap, then reload. Skip the
+    // delay when the user prefers reduced motion — reload immediately.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return window.location.reload();
+    reloadBtn.classList.add("is-spinning");
+    setTimeout(() => window.location.reload(), 320);
+  });
 }
 
 function missionCard(b) {
@@ -793,27 +818,61 @@ function overallSevClass(b) {
 
 /* ── 7.2 Tab bar ───────────────────────────────────────────────────── */
 function renderTabs() {
-  document.getElementById("tabs").innerHTML = TABS.map(
+  const buttons = TABS.map(
     (t) => `<button class="tab" role="tab" data-tab="${t.id}" aria-selected="${t.id === state.tab}">
       ${icon(t.id, "tab__icon")}<span>${t.label}</span></button>`
   ).join("");
+  // A single 2px underline that slides between tabs, instead of each tab owning
+  // its own border that jumps on switch. Width is one equal tab slot.
+  document.getElementById("tabs").innerHTML =
+    buttons + `<div class="tab-bar__indicator" aria-hidden="true" style="width:${100 / TABS.length}%"></div>`;
   document.querySelectorAll(".tab").forEach((el) =>
     el.addEventListener("click", () => selectTab(el.dataset.tab))
   );
+  positionTabIndicator(state.tab);
+}
+
+// Slide the tab underline to sit under the active tab. Called on every tab change.
+function positionTabIndicator(id) {
+  const ind = document.querySelector(".tab-bar__indicator");
+  if (!ind) return;
+  const idx = TABS.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  ind.style.left = `${(idx / TABS.length) * 100}%`;
 }
 
 function selectTab(id) {
+  // Direction of travel drives the slide: moving right through the tab order
+  // enters from the right, moving left enters from the left (reduced-motion off
+  // via CSS). Compared against the outgoing tab before we overwrite state.tab.
+  const prevIdx = TABS.findIndex((t) => t.id === state.tab);
+  const nextIdx = TABS.findIndex((t) => t.id === id);
+  const dir = nextIdx < prevIdx ? "back" : "fwd";
   state.tab = id;
   hideGlossaryPopover();
   document.querySelectorAll(".tab").forEach((el) =>
     el.setAttribute("aria-selected", String(el.dataset.tab === id))
   );
+  positionTabIndicator(id);
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${id}`));
-  document.querySelector("main").scrollTo({ top: 0 });
+  playViewEnter(document.getElementById(`view-${id}`), dir);
+  const main = document.querySelector("main");
+  main.scrollTo({ top: 0 });
+  setHeaderScrolled(false); // fresh view starts at the top
   if (id === "map" && state.briefing) {
     requestAnimationFrame(() => initMainMap(state.briefing));
   }
   if (id === "forecast" && _fcSync) requestAnimationFrame(_fcSync);
+}
+
+// Re-trigger the view's enter animation (slide + staggered card fade). Removing
+// then forcing a reflow before re-adding restarts the CSS animation each switch.
+// The "about" view has no tab index (dir defaults forward) — still animates in.
+function playViewEnter(view, dir) {
+  if (!view) return;
+  view.classList.remove("is-entering", "enter-fwd", "enter-back");
+  void view.offsetWidth; // reflow so the animation replays
+  view.classList.add("is-entering", dir === "back" ? "enter-back" : "enter-fwd");
 }
 
 /* ── 7.4 Overview ──────────────────────────────────────────────────── */
@@ -3135,6 +3194,7 @@ async function main() {
     if (cfg?.heat_labels) Object.assign(TIER_LABELS, cfg.heat_labels);
   } catch (_) { /* keep identity defaults */ }
   renderTabs();
+  initHeaderScrollShadow();
   renderLoadingState();
   initGlossaryInteractions();
   initPlannerControls();
