@@ -42,6 +42,12 @@ load_config() {
     : "${DEPLOY_DATA_DIR:=/var/lib/upstreamwx}"
     : "${DEPLOY_ENV_DIR:=/etc/upstreamwx}"
     : "${DEPLOY_ENV_FILE:=/etc/upstreamwx/upstreamwx.env}"
+    # Ops wrapper (deploy/uwx-ctl): bootstrap persists the loaded deploy config to
+    # DEPLOY_CTL_CONFIG and installs the wrapper as /usr/local/bin/$DEPLOY_CTL_NAME with that
+    # path baked in, so `uwx-ctl deploy` needs no DEPLOY_CONFIG. A box running BOTH
+    # staging and prod overrides DEPLOY_CTL_NAME in the staging config so the two don't collide.
+    : "${DEPLOY_CTL_CONFIG:=${DEPLOY_ENV_DIR}/deploy.conf}"
+    : "${DEPLOY_CTL_NAME:=uwx-ctl}"
     : "${DEPLOY_BIND_HOST:=127.0.0.1}"
     : "${DEPLOY_BIND_PORT:=8000}"
     # --- SA-06 atomic releases -------------------------------------------------------
@@ -118,6 +124,7 @@ render_template() {
         -e "s|__ACME_WEBROOT__|${DEPLOY_ACME_WEBROOT}|g" \
         -e "s|__TLS_CERT__|${DEPLOY_TLS_CERT}|g" \
         -e "s|__TLS_KEY__|${DEPLOY_TLS_KEY}|g" \
+        -e "s|__CTL_CONFIG__|${DEPLOY_CTL_CONFIG}|g" \
         "$src" > "$dest"
 }
 

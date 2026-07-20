@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# uwx-ctl — one-command ops wrapper for the UpstreamWX deploy scripts.
+#
+# bootstrap.sh renders this template (the __TOKENS__ below) and installs it to
+# /usr/local/bin/<name> with THIS box's environment baked in — so an operator runs
+# `uwx-ctl deploy` instead of remembering `DEPLOY_CONFIG=… /opt/…/current/deploy/deploy.sh`.
+# On separate staging/prod boxes each gets its own wrapper pointing at its own config; a box
+# hosting both can install two names via DEPLOY_CTL_NAME.
+#
+#   uwx-ctl deploy [ref]     build + activate a release (ref defaults to DEPLOY_BRANCH)
+#   uwx-ctl rollback         flip back to the previous release (no rebuild)
+#   uwx-ctl bootstrap        re-run host provisioning (re-render unit/nginx, TLS, etc.)
+#   uwx-ctl status           systemctl status for the service
+#   uwx-ctl health           GET /v1/health (loopback)
+#   uwx-ctl logs [args…]     journalctl for the service (pass -f, -n 100, …)
+#   uwx-ctl releases         list on-disk releases (marks the active one)
+#   uwx-ctl version          show the active release
+#   uwx-ctl restart          restart the service
+#
+# Commands that change state use sudo automatically (or run directly if already root).
+set -euo pipefail
+
+# --- baked in by bootstrap.sh (render_template) --------------------------------------
+CTL_CONFIG="__CTL_CONFIG__"     # persisted DEPLOY_CONFIG for this env (e.g. /etc/upstreamwx/deploy.conf)
+APP_DIR="__APP_DIR__"
+SERVICE="__SERVICE__"
+BIND_HOST="__BIND_HOST__"
+BIND_PORT="__BIND_PORT__"
+
+SCRIPTS="$APP_DIR/current/deploy"
+HEALTH_URL="http://${BIND_HOST}:${BIND_PORT}/v1/health"
+
+_run_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+
+_deploy_env() {
+    # Run one of the deploy scripts with this env's config selected.
+    local script="$1"; shift
+    [ -x "$SCRIPTS/$script" ] || { echo "error: $SCRIPTS/$script not found — is a release active?" >&2; exit 1; }
+    _run_root env DEPLOY_CONFIG="$CTL_CONFIG" "$SCRIPTS/$script" "$@"
+}
+
+_usage() {
+    cat <<EOF
+uwx-ctl — ops wrapper for this UpstreamWX box (service: $SERVICE)
+
+  uwx-ctl deploy [ref]     build + activate a release (ref defaults to DEPLOY_BRANCH)
+  uwx-ctl rollback         flip back to the previous release (no rebuild)
+  uwx-ctl bootstrap        re-run host provisioning (re-render unit/nginx, TLS, …)
+  uwx-ctl status           systemctl status for the service
+  uwx-ctl health           GET /v1/health (loopback)
+  uwx-ctl logs [args…]     journalctl for the service (pass -f, -n 100, …)
+  uwx-ctl releases         list on-disk releases (marks the active one)
+  uwx-ctl version          show the active release
+  uwx-ctl restart          restart the service
+
+State-changing commands use sudo automatically. Config: $CTL_CONFIG
+EOF
+}
+
+cmd="${1:-help}"; shift || true
+cmd="${cmd#--}"          # allow `--deploy` as an alias for `deploy`
+
+case "$cmd" in
+    deploy)    _deploy_env deploy.sh "$@" ;;
+    bootstrap) _deploy_env bootstrap.sh "$@" ;;
+    restart)   _run_root systemctl restart "$SERVICE" ;;
+    status)    _run_root systemctl status "$SERVICE" --no-pager "$@" || true ;;
+    logs)      _run_root journalctl --namespace=upstreamwx -u "$SERVICE" "$@" ;;
+    health)    curl -fsS "$HEALTH_URL" && echo || { echo "unhealthy (curl $HEALTH_URL failed)" >&2; exit 1; } ;;
+    version)
+        [ -L "$APP_DIR/current" ] && echo "current -> $(readlink "$APP_DIR/current")"
+        curl -fsS "$HEALTH_URL" 2>/dev/null | grep -o '"release":"[^"]*"' || true
+        ;;
+    releases)
+        cur="$(readlink -f "$APP_DIR/current" 2>/dev/null || true)"
+        shopt -s nullglob
+        for d in "$APP_DIR/releases"/*/; do
+            d="${d%/}"
+            if [ "$d" = "$cur" ]; then printf '* %s (current)\n' "$(basename "$d")"
+            else printf '  %s\n' "$(basename "$d")"; fi
+        done
+        ;;
+    rollback)
+        # Flip `current` back to the previous release and restart — a fast, no-rebuild rollback
+        # (the atomic model keeps old releases on disk). Reuses the deploy engine's own helpers.
+        _run_root env DEPLOY_CONFIG="$CTL_CONFIG" bash -c '
+            set -euo pipefail
+            source "'"$SCRIPTS"'/_lib.sh"; load_config
+            cur="$(current_release_target)"
+            prev=""
+            while IFS= read -r d; do
+                d="${d%/}"
+                [ "$d" = "$cur" ] && continue
+                prev="$d"; break
+            done < <(ls -1dt "$DEPLOY_RELEASES_DIR"/*/ 2>/dev/null || true)
+            [ -n "$prev" ] || { echo "no previous release to roll back to" >&2; exit 1; }
+            [ -f "$prev/.release-ok" ] || { echo "previous release $prev is incomplete" >&2; exit 1; }
+            log "rolling back: $(basename "$cur") -> $(basename "$prev")"
+            activate_release "$prev"
+            systemctl restart "$DEPLOY_SERVICE"
+            for _ in $(seq 1 20); do
+                curl -fsS "'"$HEALTH_URL"'" >/dev/null 2>&1 && { ok "healthy on $(basename "$prev")"; exit 0; }
+                sleep 1
+            done
+            die "rolled back but service did not become healthy — check logs"
+        ' ;;
+    help|-h|"") _usage ;;
+    *) echo "unknown command: $cmd" >&2; echo >&2; _usage >&2; exit 2 ;;
+esac
