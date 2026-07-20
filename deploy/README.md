@@ -41,6 +41,7 @@ serve app-only (e.g. tailnet staging).
 | `upstreamwx.env.example` | runtime env/secrets template → `/etc/upstreamwx/upstreamwx.env` |
 | `bootstrap.sh` | **one-time** server provisioning (run as root on the server) |
 | `deploy.sh` | update + restart on the server (run for every release) |
+| `uwx-ctl` | ops wrapper template → `/usr/local/bin/uwx-ctl` (deploy/rollback/logs/… with the env baked in) |
 | `systemd/upstreamwx-api.service` | systemd unit template (`__TOKENS__` rendered at install) |
 | `nginx/upstreamwx.conf` | nginx site template |
 | `_lib.sh` | shared logging / config / template rendering (sourced, not run) |
@@ -142,33 +143,50 @@ These are scripted into `bootstrap.sh`/`deploy.sh`; set the gates on the **publi
 
 ---
 
-## Routine deploys (every release)
+## Routine deploys (every release) — the `uwx-ctl` wrapper
 
-The server already has everything; a deploy builds the new ref into a fresh release and
-flips to it. SSH in and run `deploy.sh` from the active release (or any clone of the repo):
+`bootstrap.sh` installs **`/usr/local/bin/uwx-ctl`** with this box's environment baked
+in, so ongoing ops need **no `DEPLOY_CONFIG` and no `current/…` path** (the exact footgun that
+otherwise mis-fires a staging deploy against prod defaults). SSH in and:
 
 ```sh
-sudo /opt/upstreamwx/current/deploy/deploy.sh main   # or any branch / tag / commit SHA
+uwx-ctl deploy [ref]     # build + activate a release (ref defaults to DEPLOY_BRANCH)
+uwx-ctl rollback         # flip back to the previous release (no rebuild)
+uwx-ctl status           # systemctl status
+uwx-ctl health           # GET /v1/health
+uwx-ctl logs -f          # follow the service journal
+uwx-ctl releases         # list on-disk releases (marks the active one)
+uwx-ctl version          # show the active release
+uwx-ctl restart
+uwx-ctl bootstrap        # re-run host provisioning
 ```
 
-`deploy.sh` builds the ref into a root-owned `releases/<sha>` (clean export + its own
-`uv sync --frozen` venv + Chromium), atomically flips the `current` symlink, restarts, and
-**blocks on `/v1/health`** — a release that doesn't come up healthy is **rolled back**
-automatically (the symlink flips to the previous release) and the deploy exits non-zero with
-the last 40 journal lines. It stamps the release into `frontend/version.json` (git-ignored),
-which `/v1/health` echoes as `release` and the PWA polls to nudge stale clients to reload.
+State-changing commands invoke `sudo` themselves. The wrapper's config lives at
+`/etc/upstreamwx/deploy.conf` (or `/etc/<env>/deploy.conf` for a named env) — a durable copy of
+the `config.env` bootstrap ran with; edit it there, or re-run `bootstrap` from a clone to
+refresh it. **Each box gets its own wrapper** pointing at its own env; a box hosting both
+staging and prod sets `DEPLOY_CTL_NAME` in the staging config so the two don't collide.
 
-**Production deploys a tag, not a branch.** A tag is immutable, so "what's in prod" is a
-fixed, knowable thing and rollback is just deploying the previous tag. Deploying a moving
-branch works but leaves prod tracking whatever that branch points at right now. See
+Under the hood `deploy` builds the ref into a root-owned `releases/<sha>` (clean export + its
+own `uv sync --frozen` venv + Chromium), atomically flips the `current` symlink, restarts, and
+**blocks on `/v1/health`** — a release that doesn't come up healthy is **rolled back**
+automatically and the deploy exits non-zero with the last 40 journal lines. It stamps the
+release into `frontend/version.json` (git-ignored), which `/v1/health` echoes as `release`.
+
+**Production deploys a tag, not a branch** — immutable, so "what's in prod" is knowable and
+rollback is just the previous tag. See
 [`../docs/deployment-workflow.md`](../docs/deployment-workflow.md) for the full release flow.
 
-Roll back by deploying an older tag or SHA:
+Roll back either to the previous release (fast, no rebuild) or to a specific ref:
 
 ```sh
-sudo /opt/upstreamwx/deploy/deploy.sh v0.3.1
-sudo /opt/upstreamwx/deploy/deploy.sh 1a2b3c4
+uwx-ctl rollback          # previous release on disk
+uwx-ctl deploy v0.6.1      # a specific older tag/SHA
 ```
+
+> Without the wrapper (e.g. before the first bootstrap that installs it), the underlying form
+> is `sudo DEPLOY_CONFIG=<config> <app_dir>/current/deploy/deploy.sh [ref]` — **staging always
+> needs `DEPLOY_CONFIG`**; prod works without it (prod paths are the defaults).
 
 ---
 
