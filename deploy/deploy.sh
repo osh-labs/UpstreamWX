@@ -310,6 +310,10 @@ fi
 # the previous release and restart — a true source+deps+browser rollback.
 _restart_and_check() {
     # _restart_and_check LABEL -> 0 healthy, 1 not
+    # Idempotently ensure the unit is boot-enabled on every deploy, so a host provisioned before
+    # this fix (e.g. staging, which stayed DOWN after a reboot) self-heals without a re-bootstrap.
+    # `enable` only writes the WantedBy symlink; it does not start the service — restart does that.
+    systemctl enable "$DEPLOY_SERVICE" >/dev/null 2>&1 || true
     systemctl restart "$DEPLOY_SERVICE"
     local url="http://${DEPLOY_BIND_HOST}:${DEPLOY_BIND_PORT}/v1/health" i
     for i in $(seq 1 20); do
