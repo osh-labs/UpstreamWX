@@ -226,7 +226,18 @@ heavy shadow. `--shadow-card: 0 1px 0 rgba(255,255,255,0.03) inset, 0 2px 8px
 rgba(0,0,0,0.4)`. `--shadow-pop: 0 8px 28px rgba(0,0,0,0.55)` for map cards/menus.
 
 **Motion** — `--ease: cubic-bezier(0.2,0.6,0.2,1)`; `--dur-fast: 120ms`,
-`--dur: 200ms`. Respect `prefers-reduced-motion`.
+`--dur: 200ms`. Respect `prefers-reduced-motion`. A subtle, fixed baseline of
+transitions is applied (no user knob): on tab switch the outgoing view is
+replaced and the incoming view slides in (from the right moving forward through
+the tab order, from the left moving back) with its cards fading up in a short
+stagger; the tab underline is a single indicator that slides between tabs; the
+header lifts a drop-shadow once the view body scrolls; the collapse chevrons
+rotate 180°. Two live accents: the overall/hero posture chip pulses slowly on
+the Extreme/High tiers only (never the smaller per-hazard chips), and the header
+reload icon spins for a beat on tap. Every one of these is inside a
+`prefers-reduced-motion: no-preference` guard — reduced-motion users get the
+plain, instant UI. Transition-length motion stays within the 120–200 ms band;
+the chip pulse is a slow ambient accent (~2.4 s), not a transition.
 
 **Focus** — visible 2 px ring: `outline: 2px solid var(--color-brand-strong);
 outline-offset: 2px`. Never remove focus outlines.
@@ -284,14 +295,15 @@ the noted class. Visual contract first; PRD reference in parentheses.
 - Heat variant uses the heat ramp + the NWS category label.
 
 ### 7.5 Confidence bar (`.confidence`) — FR-36
-- A three-stop orange (`--sev-high`) track the same width as the posture pill it
-  sits under, with the small gray label `High|Moderate|Low confidence` centered
-  below.
-- Three beads — low (left) · moderate (centre) · high (right). The stop for the
-  engine's level is **filled**, the other two **hollow** (orange outline); the
-  level is read from **position, not hue** (FR-36 — style, not hue).
-- The connecting segments are fixed decoration: a thin segment left of centre,
-  a thicker one to the right. Non-interactive — set by the engine.
+- Three discrete signal bars of ascending height (short → tall), the same width
+  as the posture pill it sits under, with the small gray label
+  `High|Moderate|Low confidence` centered below.
+- The filled *count* reads the engine's level like a signal-strength meter: Low
+  = 1 filled, Moderate = 2, High = all 3. Fill is **neutral**
+  (`--color-text-secondary` filled, `--color-surface-3` empty) — never a
+  severity hue, so confidence is read from **shape, not color** (FR-36) and can
+  never be mistaken for a hazard tier.
+- Non-interactive — set by the engine.
 
 ### 7.6 Metric card (`.metric-card`) — Appendix D §18.2
 - Grid of glanceable cards: label (caption), big value (`--text-display`, mono),

@@ -72,6 +72,8 @@ main {
 
 /* ── 7.1 App header ────────────────────────────────────────────────── */
 .app-header {
+  position: relative;
+  z-index: 2; /* sit above the scrolling view so the drop-shadow reads */
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -80,6 +82,11 @@ main {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
+/* Lifts once the view body scrolls (JS toggles .is-scrolled). */
+@media (prefers-reduced-motion: no-preference) {
+  .app-header { transition: box-shadow var(--dur) var(--ease); }
+}
+.app-header.is-scrolled { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 
 .brand {
   display: flex;
@@ -157,9 +164,13 @@ main {
   background: var(--color-surface-2);
 }
 .header-reload__icon { width: 18px; height: 18px; }
+/* Spin the icon for a beat when tapped, before the page reload (JS adds the
+   class; the reduced-motion path reloads immediately without spinning). */
+.header-reload.is-spinning .header-reload__icon { animation: wx-spin 0.7s linear; }
 
 /* ── 7.2 Tab bar ───────────────────────────────────────────────────── */
 .tab-bar {
+  position: relative; /* anchors the sliding underline indicator */
   flex-shrink: 0;
   display: flex;
   background: var(--color-surface);
@@ -176,12 +187,10 @@ main {
   padding: var(--space-2) var(--space-1);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
   color: var(--color-text-secondary);
   font-size: var(--text-caption);
   letter-spacing: 0.02em;
-  transition: color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+  transition: color var(--dur-fast) var(--ease);
 }
 
 .tab__icon {
@@ -191,8 +200,20 @@ main {
 
 .tab[aria-selected="true"] {
   color: var(--color-brand);
-  border-bottom-color: var(--color-brand);
-  background: var(--color-brand-dim);
+}
+
+/* Sliding 2px underline under the active tab (position set inline by JS). The
+   left transition is gated to no-preference so reduced-motion snaps it. */
+.tab-bar__indicator {
+  position: absolute;
+  bottom: -1px; /* overlap the 1px bottom border */
+  left: 0;
+  height: 2px;
+  background: var(--color-brand);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tab-bar__indicator { transition: left var(--dur) var(--ease); }
 }
 
 /* ── View body ─────────────────────────────────────────────────────── */
@@ -206,6 +227,47 @@ main {
 
 .view[hidden] {
   display: none;
+}
+
+/* ── Motion primitives ─────────────────────────────────────────────────
+   Subtle, fixed baseline (STYLE_GUIDE §5): tab-switch view enter, staggered
+   card fade-in, a slow severity-chip pulse, and the reload spin. Every *applied*
+   animation lives inside a prefers-reduced-motion: no-preference guard, so a
+   reduced-motion user gets the plain, instant UI. Transition-length motion is
+   held to the guide's 120–200ms; the pulse is a slow ambient accent, not a
+   transition. */
+@keyframes wx-view-in-right {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes wx-view-in-left {
+  from { opacity: 0; transform: translateX(-14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes wx-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes wx-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+@keyframes wx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .view.is-entering.enter-fwd { animation: wx-view-in-right var(--dur) var(--ease) both; }
+  .view.is-entering.enter-back { animation: wx-view-in-left var(--dur) var(--ease) both; }
+  /* Stagger the first several direct children in as the view enters. */
+  .view.is-entering > * { animation: wx-card-in var(--dur) var(--ease) both; }
+  .view.is-entering > *:nth-child(1) { animation-delay: 0ms; }
+  .view.is-entering > *:nth-child(2) { animation-delay: 40ms; }
+  .view.is-entering > *:nth-child(3) { animation-delay: 80ms; }
+  .view.is-entering > *:nth-child(4) { animation-delay: 120ms; }
+  .view.is-entering > *:nth-child(5) { animation-delay: 160ms; }
+  .view.is-entering > *:nth-child(n + 6) { animation-delay: 200ms; }
 }
 
 .section-title {
@@ -309,6 +371,12 @@ main {
 .sev-elevated { background: var(--sev-elevated-wash); color: var(--sev-elevated-text); }
 .sev-high { background: var(--sev-high-wash); color: var(--sev-high-text); }
 .sev-extreme { background: var(--sev-extreme-wash); color: var(--sev-extreme-text); }
+
+/* Slow ambient pulse on the overall/hero chip for the top two tiers (JS adds
+   .is-live only there). Draws the eye without blinking; off under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .posture-chip.is-live { animation: wx-chip-pulse 2.4s var(--ease) infinite; }
+}
 
 /* heat category variants */
 .heat-caution { background: rgba(227, 192, 26, 0.16); color: var(--heat-caution); }
@@ -600,6 +668,7 @@ main {
 .hazard-detail__name { flex: 1; font-weight: 600; }
 .hazard-detail__chev { width: 18px; height: 18px; color: var(--color-text-muted); transition: transform var(--dur-fast) var(--ease); }
 details[open] .hazard-detail__chev { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .hazard-detail__chev { transition: none; } }
 
 .hazard-detail__body {
   padding: 0 var(--space-3) var(--space-3);
