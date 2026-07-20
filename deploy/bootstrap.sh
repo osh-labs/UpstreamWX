@@ -226,6 +226,13 @@ else
 fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
+# Enable the API unit so its [Install] WantedBy=multi-user.target wiring takes effect and the
+# service starts automatically on boot. Without this the unit is loaded and can be started by
+# deploy.sh's `systemctl restart`, but a host reboot leaves it DOWN (the staging box did exactly
+# this). deploy.sh re-asserts this idempotently, so already-provisioned hosts self-heal on deploy.
+systemctl enable "$DEPLOY_SERVICE" >/dev/null 2>&1 \
+    && ok "boot-enabled $DEPLOY_SERVICE (starts on reboot)" \
+    || warn "could not enable $DEPLOY_SERVICE — it will NOT start on reboot"
 if _nginx_out="$(nginx -t 2>&1)"; then
     systemctl enable nginx >/dev/null 2>&1 || true
     # restart (not reload) so nginx workers pick up the DEPLOY_GROUP membership added above
