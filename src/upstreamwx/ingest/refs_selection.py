@@ -15,11 +15,14 @@ is picked up on the next scheduler tick, not on a user's click).
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from ..config import Settings, get_settings
 from ..refs.sources import REFS_FHOURS, RefsCycle
+
+logger = logging.getLogger("upstreamwx.ingest.refs_selection")
 
 # Upper product cap (hours of lead from "now"): beyond this GEFS owns the horizon; REFS is the
 # same-day convection-allowing supplement (PRD §6.2 FR-7a). REFS reaches f60, but UpstreamWX
@@ -60,16 +63,27 @@ def cached_cycles(
     Reads ``data_dir/refs/{date}_{hh}`` dirs the scheduler has warmed. Skips empty or malformed
     dirs and any cycle dated in the future relative to ``now``. Capped at ``max_back`` newest.
     This is the source of truth for selection — only warmed runs are served.
+
+    An unreadable cache root reads as *empty* rather than raising, so a data-dir misconfig
+    degrades REFS to the GEFS backstop instead of failing the briefing (issue #147, NFR-6).
     """
     now = _as_utc(now) if now is not None else datetime.now(UTC)
     settings = settings or get_settings()
     root = settings.data_dir / "refs"
-    if not root.is_dir():
+    try:
+        if not root.is_dir():
+            return []
+        entries = list(root.iterdir())
+    except OSError as exc:
+        logger.warning("REFS cache root %s unreadable (%s) — treating as empty (NFR-6)", root, exc)
         return []
 
     cycles: list[RefsCycle] = []
-    for d in root.iterdir():
-        if not d.is_dir() or not any(d.iterdir()):
+    for d in entries:
+        try:
+            if not d.is_dir() or not any(d.iterdir()):
+                continue
+        except OSError:
             continue
         try:
             date, hh = d.name.split("_")

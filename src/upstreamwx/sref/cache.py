@@ -19,6 +19,7 @@ a concurrent reader sees either no file or the complete one.
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -29,6 +30,8 @@ from ..grib.cache import cached_subset, decode_cached, prune_cycle_dirs
 from .extract import SrefField, _primary_dataarray, open_subset
 from .fetch import download_subset, fetch_idx, select_messages
 from .sources import SREF_CYCLES, SrefCycle
+
+logger = logging.getLogger("upstreamwx.sref.cache")
 
 # The (var, prob, freq) fields the request path aggregates (see
 # :mod:`upstreamwx.ingest.sref_provider`): P(APCP>6.35 mm/3h) flash-flood proxy and
@@ -153,12 +156,21 @@ def cached_cycles(
         now = now.replace(tzinfo=UTC)
     settings = settings or get_settings()
     root = settings.data_dir / "sref"
-    if not root.is_dir():
+    # An unreadable cache root reads as empty rather than raising (issue #147, NFR-6).
+    try:
+        if not root.is_dir():
+            return []
+        entries = list(root.iterdir())
+    except OSError as exc:
+        logger.warning("SREF cache root %s unreadable (%s) — treating as empty (NFR-6)", root, exc)
         return []
 
     cycles: list[SrefCycle] = []
-    for d in root.iterdir():
-        if not d.is_dir() or not any(d.iterdir()):
+    for d in entries:
+        try:
+            if not d.is_dir() or not any(d.iterdir()):
+                continue
+        except OSError:
             continue
         try:
             date, hh = d.name.split("_")

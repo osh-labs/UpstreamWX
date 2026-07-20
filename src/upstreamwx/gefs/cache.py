@@ -287,6 +287,11 @@ def cached_cycles(
 
     Mirrors :func:`upstreamwx.sref.cache.cached_cycles`. Skips empty/malformed dirs, any hour
     that is not a real GEFS cycle, and any cycle dated in the future relative to ``now``.
+
+    An unreadable cache root (missing parent, permission denied, I/O error) reads as *empty*
+    rather than raising — callers fall back to the live probe / cold ingest exactly as on a
+    cold cache, instead of 500ing the whole briefing (issue #147, NFR-6). ``Path.is_dir()``
+    propagates ``PermissionError``, which took staging down when the data dir was misdirected.
     """
     if now is None:
         now = datetime.now(UTC)
@@ -294,12 +299,20 @@ def cached_cycles(
         now = now.replace(tzinfo=UTC)
     settings = settings or get_settings()
     root = settings.data_dir / "gefs"
-    if not root.is_dir():
+    try:
+        if not root.is_dir():
+            return []
+        entries = list(root.iterdir())
+    except OSError as exc:
+        logger.warning("GEFS cache root %s unreadable (%s) — treating as empty (NFR-6)", root, exc)
         return []
 
     cycles: list[GefsCycle] = []
-    for d in root.iterdir():
-        if not d.is_dir() or not any(d.iterdir()):
+    for d in entries:
+        try:
+            if not d.is_dir() or not any(d.iterdir()):
+                continue
+        except OSError:
             continue
         try:
             date, hh = d.name.split("_")
