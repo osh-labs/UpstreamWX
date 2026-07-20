@@ -17,6 +17,22 @@
          version, no third-party executable code in the app origin. Exact pins live in
          frontend/vendor/ (provenance + integrity hashes in docs/sa-05-*-workplan.md). -->
     <link rel="stylesheet" href="vendor/maplibre-gl-5.24.0.css" />
+    <!-- Albert Sans / Ubuntu Mono are vendored same-origin the same way (provenance in
+         docs/font-vendoring-provenance.md); preload the faces used above the fold. -->
+    <link
+      rel="preload"
+      href="vendor/fonts/albert-sans-v4-latin-wght-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
+    <link
+      rel="preload"
+      href="vendor/fonts/ubuntu-mono-v19-latin-400-normal.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
     <link rel="stylesheet" href="styles/tokens.css" />
     <link rel="stylesheet" href="styles/app.css" />
   </head>

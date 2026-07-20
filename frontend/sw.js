@@ -36,6 +36,11 @@ const SHELL_ASSETS = [
   "vendor/maplibre-gl-5.24.0.js",
   "vendor/maplibre-gl-5.24.0.css",
   "vendor/maplibre-contour-0.1.0.js",
+  // Vendored, exact-pinned webfonts served same-origin (same SA-05 rationale). Precaching
+  // them keeps type rendering consistent offline instead of falling back to system fonts.
+  "vendor/fonts/albert-sans-v4-latin-wght-normal.woff2",
+  "vendor/fonts/ubuntu-mono-v19-latin-400-normal.woff2",
+  "vendor/fonts/ubuntu-mono-v19-latin-700-normal.woff2",
   "icons/icon.svg",
   "icons/cave.png",
   "icons/canyon.png",

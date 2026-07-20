@@ -5,6 +5,32 @@
  * Source of truth: frontend/styles/tokens.css / STYLE_GUIDE.md §3–§6.
  */
 
+/* Vendored, exact-pinned webfonts served same-origin (SA-05 rationale) — landing has
+ * its own nginx root, so its own copy of the font files lives in landing/vendor/fonts/. */
+@font-face {
+  font-family: "Albert Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../vendor/fonts/albert-sans-v4-latin-wght-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Ubuntu Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("../vendor/fonts/ubuntu-mono-v19-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Ubuntu Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("../vendor/fonts/ubuntu-mono-v19-latin-700-normal.woff2") format("woff2");
+}
+
 :root {
   /* ── 3.1 Surfaces & chrome ───────────────────────────────────────── */
   --color-bg: #0a0e14;
@@ -61,9 +87,10 @@
   --color-success: #3fb950;
 
   /* ── 4. Typography ───────────────────────────────────────────────── */
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial,
-    sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas, monospace;
+  --font-sans: "Albert Sans", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica,
+    Arial, sans-serif;
+  --font-mono: "Ubuntu Mono", ui-monospace, "SF Mono", "Roboto Mono", Menlo, Consolas,
+    monospace;
 
   --text-display: 28px;
   --lh-display: 34px;
