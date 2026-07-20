@@ -914,7 +914,7 @@ function renderOverview(b) {
 
   document.getElementById("view-overview").innerHTML = `
     ${missionCard(b)}
-    <details class="hazard-detail" id="risk-discussion" open>
+    <details class="hazard-detail" id="risk-discussion">
       <summary class="hazard-detail__summary">
         <span class="hazard-detail__name">Risk Discussion</span>
         ${icon("chevron", "hazard-detail__chev")}
