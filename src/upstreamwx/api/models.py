@@ -9,7 +9,7 @@ source-availability provenance the PWA (M0.4) needs to show currency and degrada
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -192,6 +192,11 @@ class MissionSpec(BaseModel):
     frame: bool | None = Field(
         default=None,
         description="add Haiku framing; null = frame iff ANTHROPIC_API_KEY is set (FR-21)",
+    )
+    units: Literal["us", "metric"] = Field(
+        default="us",
+        description="display unit system for the rendered briefing (FR-9); engine result "
+        "is identical either way (FR-13, NFR-4)",
     )
     inputs: HazardInputsSpec | None = None
 
@@ -486,6 +491,9 @@ class BriefingResponse(BaseModel):
     # arbitrary dicts (watershed/roc/laoc GeoJSON, the *_series value lists) are bounded by the
     # endpoint's 2 MiB streaming body cap rather than per-field.
     markdown: str = Field(max_length=262_144)
+    # Display system the briefing was rendered in ("us" | "metric"); the PWA labels its own
+    # chrome from this so labels track the data, not a possibly-stale client preference (FR-9).
+    units: str = Field(default="us", max_length=8)
     overall_posture: str = Field(max_length=32)
     overall_confidence: str = Field(max_length=32)
     # A semicolon-join of every threshold-config version (5 today, ~76 chars); generous headroom.

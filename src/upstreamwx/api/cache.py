@@ -106,7 +106,9 @@ class BoundedLRU(Generic[_V]):
             self._total_bytes = 0
 
 
-def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> str:
+def mission_cache_key(
+    mission: Mission, inputs: HazardInputs | None = None, *, units: str = "us"
+) -> str:
     """Stable key identifying a mission's briefing (location + window + activity + metadata).
 
     Coordinates are rounded to ~11 m so a reopened pin at the same spot hits. When an
@@ -125,6 +127,10 @@ def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> s
     otherwise be gamed into a collision). ``name`` is the only field rendered today;
     ``party_size``/``route_note`` are included defensively so a future change that surfaces them
     cannot reintroduce the leak.
+
+    ``units`` (display system) is folded in too: it changes the rendered Markdown and structured
+    values (°F vs °C, etc.), so two requests differing only by display units must not collide on
+    one cached briefing. It does not change the engine result (FR-13, NFR-4).
     """
     parts = [
         mission.activity_type.value,
@@ -137,6 +143,7 @@ def mission_cache_key(mission: Mission, inputs: HazardInputs | None = None) -> s
         "slot" if mission.is_slot else "open",
         f"roc={mission.radius_km}",
         f"laoc={mission.lightning_radius_km}",
+        f"units={units}",
         f"meta={(mission.name, mission.party_size, mission.route_note)!r}",
     ]
     if inputs is not None:

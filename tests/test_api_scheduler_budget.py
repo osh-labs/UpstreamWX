@@ -27,7 +27,7 @@ def _offline_service(monkeypatch) -> BriefingService:
     """A service whose generator never hits the network (forces empty inputs)."""
     real = generate_mod.generate_briefing
 
-    def offline(mission, *, inputs=None, frame=None, generated_at=None, cycle=None):
+    def offline(mission, *, inputs=None, frame=None, generated_at=None, cycle=None, units="us"):
         return real(mission, inputs=inputs or HazardInputs(), frame=False,
                     generated_at=generated_at)
 
@@ -155,7 +155,7 @@ def test_refresh_survives_one_failing_mission(monkeypatch):
     bad_key = mission_cache_key(_spec(name="m1", lat=37.1).to_mission())
     real = generate_mod.generate_briefing
 
-    def flaky(mission, *, inputs=None, frame=None, generated_at=None, cycle=None):
+    def flaky(mission, *, inputs=None, frame=None, generated_at=None, cycle=None, units="us"):
         if mission_cache_key(mission) == bad_key:
             raise RuntimeError("boom")
         return real(mission, inputs=HazardInputs(), frame=False, generated_at=generated_at)
@@ -176,7 +176,7 @@ def test_registry_survives_concurrent_register_touch_refresh(monkeypatch):
     # A trivial generate stub so refresh threads spin fast without heavy engine work.
     monkeypatch.setattr(
         "upstreamwx.api.service.generate_briefing",
-        lambda mission, *, inputs=None, frame=None, generated_at=None, cycle=None: (
+        lambda mission, *, inputs=None, frame=None, generated_at=None, cycle=None, units="us": (
             generate_mod.generate_briefing(
                 mission, inputs=HazardInputs(), frame=False, generated_at=generated_at
             )

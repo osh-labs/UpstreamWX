@@ -52,6 +52,7 @@ These are load-bearing. Violating one is a correctness bug, not a style nit.
 src/upstreamwx/        backend package (importable as `upstreamwx`)
   config.py              pydantic-settings Settings (env prefix UPSTREAMWX_, reads .env)
   timezones.py           lat/lon -> IANA zone (timezonefinder, offline); localizes the mission window to local wall-clock (FR-9)
+  units.py               display-only US-customary<->metric converter + free-text unit localizer (FR-9); never touches an engine input/threshold (NFR-4)
   engine/                deterministic decision engine (the product's spine)
     models.py              Mission, HazardInputs, HazardPosture, BriefingResult; Tier/HeatCategory/Confidence enums
     assess.py              orchestrator: assess(mission, inputs, config) -> BriefingResult
@@ -519,6 +520,25 @@ window-conservative** (upstream-watershed routing, §16.1 — earlier upstream r
 travel-time lag, so slicing would understate it). Phases tile the window, so the overall FR-19 `max` is
 unchanged for heat/cold and can only *lower* lightning when its peak sits in the sheltered technical span
 (not applicable there anyway, FR-14c). Offline suite green (512); frontend verified via headless Chromium.
+
+**Unit localization: US customary / metric (2026-07-20).** A Settings toggle chooses the display
+system app-wide (FR-9); the choice propagates through the whole briefing. The conversion is
+**display-only** — the engine, thresholds YAML, and all `HazardInputs` stay in native units
+(°F / inch / mph / km) so identical inputs still yield identical engine output (NFR-4, non-negotiable
+#2/#3). A new pure `units.py` (`Units` converter + range-aware `localize_units_text`) is threaded
+through the shared generation core: `generate_briefing`/`render_md`/`to_structured` take a `units`
+param (default `"us"` is byte-identical → goldens unchanged) and convert the metric cards, forecast
+table + `temp_series`/`wind_series`, hazard `series` lines + threshold bands, risk inputs, and the
+Markdown source-data drill-down; the engine-authored driver/logic/assumption prose is localized as
+text (so "80–90 °F" → "27–32 °C"). The structured contract echoes the system in a top-level `units`
+field and carries a `watershed.area_km2` companion beside `area_sq_mi` (RoC/LAoC rings already dual-emit
+km + mi). `MissionSpec.units` (Literal, default `us`) is folded into `mission_cache_key` and carried on
+the refresh registry so scheduled re-renders keep the system; `BriefingResponse.units` surfaces it; the
+CLI gains `--units`. Frontend: `prefs.units` (in `uwx.prefs.v1`) is sent with every `/v1/briefing`,
+and the PWA localizes the few labels it authors itself (chart titles, risk card, watershed area / ring
+readouts, the RoC/LAoC slider readouts + ticks, the About methodology matrices, and map contour/peak
+elevation ft↔m) — reading the briefing's `units` for data labels and the saved pref for chrome. Backend
+suite green (524 + new `test_units.py`); metric render verified end-to-end via headless Chromium.
 
 Deferred to **M0.1.1** (requires the always-on EC2 host; cannot be validated in an
 ephemeral container): the recurring GEFS/REFS scheduler **cadence** and the

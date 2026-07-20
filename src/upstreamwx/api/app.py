@@ -668,7 +668,7 @@ async def frame_stream(
     if not api_key:
         return Response(status_code=204)
 
-    key = mission_cache_key(spec.to_mission(), spec.to_inputs())
+    key = mission_cache_key(spec.to_mission(), spec.to_inputs(), units=spec.units)
     result = service.get_result(key)
     if result is None:
         raise HTTPException(
