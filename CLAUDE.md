@@ -555,6 +555,23 @@ offline or the server endpoint is unavailable. The print template (light-theme, 
 running §17.3 reference-only footer in every page's `<tfoot>`) is precached by `sw.js`
 so the fallback path still works offline.
 
+**Staging-outage hardening: explicit deploy config, env-scoped uninstall, cache-root
+degradation (issues #146/#147/#148, 2026-07-20).** The 2026-07-20 staging 500s traced to a
+chain the deploy layer now forecloses (changelog
+`docs/changelog-2026-07-20-staging-deploy-hardening.md`; box procedure
+`docs/staging-rebuild-runbook-2026-07-20.md`). Key systemd fact: **`EnvironmentFile=` always
+overrides `Environment=` regardless of line order**, so the unit's data-dir pin now lives
+*inside* `ExecStart` via `/usr/bin/env` (nothing in the env file or a drop-in can divert it
+from `ReadWritePaths=`). `DEPLOY_CONFIG` is **required** (no silent prod default);
+bootstrap/deploy hard-block on a conflicting second install or a cross-owned data dir
+(`DEPLOY_ALLOW_COEXIST=1` opt-out); bootstrap comments out an active `UPSTREAMWX_DATA_DIR` in
+an existing env file, renders `uwx-ctl` correctly (`__SERVICE__` was never substituted), and no
+longer aborts on a same-file ctl-config re-install (#148). `uwx-ctl` gained **`uninstall`** —
+an env-scoped, self-contained teardown (typed confirmation; `--keep-data`/`--yes`) that leaves
+a coexisting env untouched. Backend (#147): `gefs`/`refs`/`sref` `cached_cycles` treat an
+unreadable cache root as empty (WARNING + cold-cache path) instead of 500ing the briefing, and
+`/v1/health` echoes `data_dir_ok`. Engine output unchanged (NFR-4).
+
 **Domain split (app subdomain + static landing).** The app (PWA + `/v1/*`, still
 single-origin) now lives at **`app.upstreamwx.com`**; the apex **`upstreamwx.com`** (+ `www`)
 serves a standalone **static landing page** from `landing/` — a vendored-token mirror of the

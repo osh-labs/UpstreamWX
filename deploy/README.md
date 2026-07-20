@@ -180,7 +180,17 @@ uwx-ctl releases         # list on-disk releases (marks the active one)
 uwx-ctl version          # show the active release
 uwx-ctl restart
 uwx-ctl bootstrap        # re-run host provisioning
+uwx-ctl uninstall        # cleanly REMOVE this environment (see below)
 ```
+
+**Clean removal / reinstall:** `uwx-ctl uninstall` tears down exactly this wrapper's baked
+environment — service unit + drop-ins, nginx sites, app/data/env dirs, service account, and
+the wrapper itself — after a typed confirmation (`--yes` skips it for automation;
+`--keep-data` preserves the data dir so ensemble caches survive a reinstall). It is
+deliberately self-contained in the wrapper, so it works even when no release is active
+(a half-broken box). A coexisting second environment is untouched, and afterwards the host
+passes bootstrap's #146 conflict scan for a fresh
+`sudo DEPLOY_CONFIG=<config> deploy/bootstrap.sh`.
 
 State-changing commands invoke `sudo` themselves. The wrapper's config lives at
 `/etc/upstreamwx/deploy.conf` (or `/etc/<env>/deploy.conf` for a named env) — a durable copy of

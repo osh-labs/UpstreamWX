@@ -21,6 +21,12 @@ Nothing in the data dirs is worth preserving (ensemble caches re-warm from the f
 
 ## 1. Full teardown (both installs — the stray prod one AND the broken staging one)
 
+> **Future clean reinstalls:** once a box runs a release containing the hardened wrapper,
+> this whole section is one command per environment — `uwx-staging uninstall` (or
+> `uwx-ctl uninstall` on prod), which removes exactly that env's unit, nginx sites,
+> app/data/env dirs, account, and wrapper. The manual steps below remain necessary **this
+> time** because the box's wrapper predates the command (and is unrendered anyway).
+
 ```sh
 # Stop + disable every UpstreamWX service
 sudo systemctl disable --now upstreamwx-api upstreamwx-staging 2>/dev/null || true

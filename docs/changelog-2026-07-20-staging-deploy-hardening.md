@@ -79,6 +79,22 @@ ineffective pin (2, shipped in the issue-#132 branch) and the bootstrap abort (5
   root and unreadable listing for all three readers, the `_cycle_token` wall-clock fallback,
   and the `data_dir_ok` signal.
 
+### `uwx-ctl` — rendered correctly, plus a scripted uninstaller (follow-up, same day)
+- **`render_template` had no `__SERVICE__` substitution rule**, so even a *successful*
+  bootstrap always installed the wrapper with `SERVICE="__SERVICE__"` unrendered — the
+  `Unit __SERVICE__.service could not be found` symptom on the staging box, previously
+  attributed solely to the #148 abort. Introduced by the uwx-ctl PR (`dd9c3e1`, #142), which
+  was the first template to use the token. The rule is added (and `__ENV_DIR__` with it).
+- **`uwx-ctl uninstall`**: the scripted form of the incident teardown, baked into the
+  wrapper (works with no active release tree — exactly the half-broken-box case). Removes
+  only this wrapper's environment — unit + drop-ins, nginx sites (`<svc>.conf`,
+  `<svc>-default.conf`, `<svc>-landing.conf`), app/data/env dirs, service account, and the
+  wrapper itself — after a typed service-name confirmation (`--yes` for automation;
+  `--keep-data` preserves the cache dir). Baked paths are sanity-checked against a path
+  allowlist before any `rm -rf`; every step tolerates a half-broken host; a coexisting
+  second environment is untouched and enumerated afterwards. Works identically for staging
+  and prod since it is rendered from each env's own config.
+
 ### Docs
 - `deploy/README.md`: explicit-`DEPLOY_CONFIG` everywhere, new "One install per host" section.
 - `deploy/config.env.example` / `config.staging.env.example`: `DEPLOY_ALLOW_COEXIST`,

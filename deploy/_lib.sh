@@ -201,6 +201,8 @@ render_template() {
         -e "s|__APP_DIR__|${DEPLOY_APP_DIR}|g" \
         -e "s|__DATA_DIR__|${DEPLOY_DATA_DIR}|g" \
         -e "s|__ENV_FILE__|${DEPLOY_ENV_FILE}|g" \
+        -e "s|__ENV_DIR__|${DEPLOY_ENV_DIR}|g" \
+        -e "s|__SERVICE__|${DEPLOY_SERVICE}|g" \
         -e "s|__BIND_HOST__|${DEPLOY_BIND_HOST}|g" \
         -e "s|__BIND_PORT__|${DEPLOY_BIND_PORT}|g" \
         -e "s|__APP_SERVER_NAME__|${DEPLOY_APP_SERVER_NAME}|g" \

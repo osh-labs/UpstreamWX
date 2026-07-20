@@ -362,5 +362,6 @@ From now on, drive this box with the wrapper (no DEPLOY_CONFIG / paths to rememb
   $DEPLOY_CTL_NAME rollback         # flip back to the previous release
   $DEPLOY_CTL_NAME status | logs -f | releases | version | restart
   $DEPLOY_CTL_NAME bootstrap        # re-run provisioning
+  $DEPLOY_CTL_NAME uninstall        # cleanly remove THIS environment (typed confirmation)
 Its config lives at $DEPLOY_CTL_CONFIG (edit there, or re-run bootstrap to refresh).
 EOF
