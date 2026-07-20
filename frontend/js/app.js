@@ -78,7 +78,66 @@ const DEFAULT_PREFS = {
   laoc_radius_km: LAOC_DEFAULT_MI * MI_TO_KM,
   approach_hrs: PHASE_DEFAULT_HR,
   egress_hrs: PHASE_DEFAULT_HR,
+  units: "us", // display system: "us" customary or "metric" (FR-9); sent with each briefing
 };
+
+// -- Display units -----------------------------------------------------------------
+// The briefing is rendered server-side in the requested system, so the JSON already
+// carries converted values (temps, wind, precip) and unit-bearing labels. The PWA only
+// needs the system to (a) pick the few labels it authors itself (chart titles, the risk
+// card, area/radius readouts) and (b) drive the pref-only chrome (sliders, map, About).
+// Data labels read the briefing's own `units` so they track the data even in demo mode;
+// chrome reads the saved preference.
+const IN_TO_MM = 25.4;
+function briefingUnits(b) {
+  return b && b.units === "metric" ? "metric" : "us";
+}
+function prefUnits() {
+  return loadPrefs().units === "metric" ? "metric" : "us";
+}
+// Unit label lookups keyed by system.
+const UNIT_LABELS = {
+  us: { temp: "°F", wind: "mph", rate: "in/hr", dist: "mi", area: "mi²", elev: "ft" },
+  metric: { temp: "°C", wind: "km/h", rate: "mm/hr", dist: "km", area: "km²", elev: "m" },
+};
+function unitLabel(sys, kind) {
+  return (UNIT_LABELS[sys] || UNIT_LABELS.us)[kind];
+}
+// Watershed area value + label for a system (the contract carries both companions, FR-3).
+function areaText(ws, sys) {
+  if (!ws) return "";
+  if (sys === "metric" && Number.isFinite(ws.area_km2)) return `${ws.area_km2.toFixed(1)} km²`;
+  if (Number.isFinite(ws.area_sq_mi)) return `${ws.area_sq_mi.toFixed(1)} mi²`;
+  return "";
+}
+// Radius readout for a roc/laoc ring in the chosen system (both companions are emitted).
+function radiusText(ring, sys) {
+  if (!ring) return "";
+  if (sys === "metric" && Number.isFinite(ring.radius_km)) return `${ring.radius_km.toFixed(0)} km`;
+  if (Number.isFinite(ring.radius_mi)) return `${ring.radius_mi.toFixed(0)} mi`;
+  return "";
+}
+// Slider readout for a mile-based stop shown in the chosen system (stops are stored km).
+function sliderStopText(mi, sys) {
+  return sys === "metric" ? `${Math.round(mi * MI_TO_KM)} km` : `${mi} mi`;
+}
+// Localize native-unit tokens in static/methodology prose (mirrors the backend
+// units.localize_units_text). Metric only; range-aware so "80 to 90 °F" converts both
+// bounds. Percentages, J/kg, and the preposition "in" are left untouched.
+function _fToC(f) { return Math.round((parseFloat(f) - 32) * 5 / 9); }
+function localizeUnitsText(text, sys) {
+  if (sys !== "metric" || !text) return text;
+  return text
+    .replace(/(-?\d+(?:\.\d+)?)(\s+to\s+)(-?\d+(?:\.\d+)?)\s*°F/g,
+      (_, a, mid, b) => `${_fToC(a)}${mid}${_fToC(b)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*[–-]\s*(-?\d+(?:\.\d+)?)\s*°F/g,
+      (_, a, b) => `${_fToC(a)}–${_fToC(b)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*°F/g, (_, a) => `${_fToC(a)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*mph\b/g, (_, a) => `${Math.round(parseFloat(a) * MI_TO_KM)} km/h`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*in\/hr\b/g, (_, a) => `${Math.round(parseFloat(a) * IN_TO_MM)} mm/hr`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*in\/(\d+)\s*h\b/g,
+      (_, a, n) => `${Math.round(parseFloat(a) * IN_TO_MM)} mm/${n} h`);
+}
 
 function loadPrefs() {
   let saved = null;
@@ -486,6 +545,7 @@ async function postBriefing(spec) {
     approach_end: approachEnd,
     egress_start: egressStart,
     lightning_radius_km: prefs.laoc_radius_km,
+    units: prefUnits(),
   };
   const opts = {
     method: "POST",
@@ -563,6 +623,7 @@ function streamSummary(spec) {
     approach_end: addHoursLocal(spec.start, prefs.approach_hrs ?? PHASE_DEFAULT_HR),
     egress_start: addHoursLocal(spec.end, -(prefs.egress_hrs ?? PHASE_DEFAULT_HR)),
     lightning_radius_km: prefs.laoc_radius_km,
+    units: prefUnits(),
   };
 
   fetch(API_FRAME, {
@@ -797,7 +858,7 @@ function missionCard(b) {
           <h1 class="mission-card__title">${esc(m.name)}</h1>
           <div class="mission-card__meta">${fmtD} · ${fmtT(start)}–${fmtT(end)} ${esc(m.timezone)}</div>
           <div class="mission-card__meta"><span class="mono">${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</span></div>
-          ${b.watershed ? `<div class="mission-card__meta">Watershed area <span class="mono">${b.watershed.area_sq_mi.toFixed(1)} mi²</span></div>` : ""}
+          ${b.watershed ? `<div class="mission-card__meta">Watershed area <span class="mono">${areaText(b.watershed, briefingUnits(b))}</span></div>` : ""}
         </div>
         <div class="mission-card__posture">
           <div class="eyebrow">Overall posture</div>
@@ -962,6 +1023,7 @@ function renderOverview(b) {
 
 /* ── 7.6 Forecast ──────────────────────────────────────────────────── */
 function renderForecast(b) {
+  const sys = briefingUnits(b);
   const f = b.forecast_hourly;
   const hours = f.hours.map(fmtClock);
   const head = `<tr><th>Hour</th>${hours.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
@@ -982,16 +1044,16 @@ function renderForecast(b) {
       </div>
     </section>
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (°F)</h2>
+      <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (${unitLabel(sys, "temp")})</h2>
       ${lineChart([b.temp_series.air, b.temp_series.feels], hours, ["var(--sev-high)", "var(--sev-extreme)"])}
       <div class="chart-caption">Air (orange) · Feels-like (red)</div>
     </section>
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (mph)</h2>
+      <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (${unitLabel(sys, "wind")})</h2>
       ${lineChart([b.wind_series.wind, b.wind_series.gust], hours, ["var(--color-brand)", "var(--color-text-muted)"])}
       <div class="chart-caption">Wind (cyan) · Gusts (grey)</div>
     </section>
-    ${renderRiskInputs(b.risk_inputs)}`;
+    ${renderRiskInputs(b.risk_inputs, sys)}`;
   flushChartInits();
   initForecastScroll();
   linkifyAcronyms(document.getElementById("view-forecast"));
@@ -999,7 +1061,7 @@ function renderForecast(b) {
 
 // Risk analysis inputs section — shows the scalar engine inputs (GEFS/REFS probs,
 // physical params, NWS alerts) so users can verify what drove each hazard tier (FR-20).
-function renderRiskInputs(ri) {
+function renderRiskInputs(ri, sys = "us") {
   if (!ri || !Object.keys(ri).length) return "";
 
   function riCard(label, iconName, value, unit, sub) {
@@ -1022,7 +1084,8 @@ function renderRiskInputs(ri) {
   if (ri.cape_jkg != null)
     cards.push(riCard("CAPE", "lightning", ri.cape_jkg, " J/kg", "Instability"));
   if (ri.convective_rate_in_per_hr != null)
-    cards.push(riCard("Conv. rate", "flash_flood", ri.convective_rate_in_per_hr, " in/hr", "Peak rate"));
+    cards.push(riCard("Conv. rate", "flash_flood", ri.convective_rate_in_per_hr,
+      ` ${unitLabel(sys, "rate")}`, "Peak rate"));
   if (!cards.length) return "";
 
   const badges = [];
@@ -1493,6 +1556,15 @@ function getDemSource() {
 function buildWxTopoStyle({ dark = true } = {}) {
   const P = dark ? WX_TOPO_DARK : WX_TOPO_LIGHT;
   const dem = getDemSource();
+  // Elevation follows the user's unit preference: feet (US contour convention) or metres.
+  // Read at style-build time; a units change applies to the base map on the next map load.
+  const metric = prefUnits() === "metric";
+  const elevMultiplier = metric ? 1 : 3.28084; // DEM is metres; scale to feet for US
+  const elevUnit = metric ? " m" : " ft";
+  const elevThresholds = metric
+    ? { 10: [500, 2500], 11: [250, 1250], 12: [100, 500], 13: [50, 250], 14: [20, 100], 15: [10, 50] }
+    : { 10: [1000, 5000], 11: [500, 2500], 12: [400, 2000], 13: [200, 1000], 14: [100, 500], 15: [40, 200] };
+  const peakElevKey = metric ? "ele" : "ele_ft"; // mountain_peak carries both
 
   const sources = {
     openmaptiles: { type: "vector", url: OFM_VECTOR_URL, attribution: OFM_ATTRIB },
@@ -1508,12 +1580,9 @@ function buildWxTopoStyle({ dark = true } = {}) {
     sources.contours = {
       type: "vector", maxzoom: 15,
       tiles: [dem.contourProtocolUrl({
-        multiplier: 3.28084,        // metres → feet (US contour convention)
+        multiplier: elevMultiplier, // metres → feet for US; metres as-is for metric
         overzoom: 1,
-        thresholds: {               // per-zoom [minor interval, index interval] in feet
-          10: [1000, 5000], 11: [500, 2500], 12: [400, 2000],
-          13: [200, 1000], 14: [100, 500], 15: [40, 200],
-        },
+        thresholds: elevThresholds, // per-zoom [minor interval, index interval] in display units
         elevationKey: "ele", levelKey: "level", contourLayer: "contours",
       })],
     };
@@ -1567,7 +1636,7 @@ function buildWxTopoStyle({ dark = true } = {}) {
       filter: ["==", ["get", "level"], 1], minzoom: 12,
       layout: {
         "symbol-placement": "line", "symbol-spacing": 320,
-        "text-field": ["concat", ["number-format", ["get", "ele"], { "max-fraction-digits": 0 }], " ft"],
+        "text-field": ["concat", ["number-format", ["get", "ele"], { "max-fraction-digits": 0 }], elevUnit],
         "text-font": ["Noto Sans Regular"], "text-size": 10, "text-rotation-alignment": "map",
       },
       paint: { "text-color": P.contourLabel, "text-halo-color": P.bg, "text-halo-width": 1.4 },
@@ -1583,8 +1652,8 @@ function buildWxTopoStyle({ dark = true } = {}) {
       "symbol-sort-key": ["coalesce", ["get", "rank"], 99],
       "text-field": ["concat",
         ["coalesce", ["get", "name:en"], ["get", "name"], ""],
-        ["case", ["has", "ele_ft"],
-          ["concat", "\n", ["number-format", ["get", "ele_ft"], { "max-fraction-digits": 0 }], " ft"],
+        ["case", ["has", peakElevKey],
+          ["concat", "\n", ["number-format", ["get", peakElevKey], { "max-fraction-digits": 0 }], elevUnit],
           ""],
       ],
       "text-font": ["Noto Sans Regular"],
@@ -1849,7 +1918,7 @@ function initMainMap(b) {
         .setHTML(`<div class="map-pop">
           <div class="map-pop__title">Approximate Watershed</div>
           <div class="map-pop__row">HUC-12 <span class="mono">${esc(wb.huc12.join(", "))}</span></div>
-          <div class="map-pop__row">Area <span class="mono">${wb.area_sq_mi.toFixed(1)} mi²</span></div>
+          <div class="map-pop__row">Area <span class="mono">${areaText(wb, briefingUnits(state.briefing))}</span></div>
         </div>`)
         .addTo(_mainMap);
     });
@@ -1865,8 +1934,8 @@ function initMainMap(b) {
     });
     _mainMap.on("click", "laoc-hit", (e) => {
       if (_moveMode) return;
-      const laocR = state.briefing?.laoc?.radius_mi;
-      const laocMi = Number.isFinite(laocR) ? ` (${laocR.toFixed(0)} mi)` : "";
+      const laocTxt = radiusText(state.briefing?.laoc, briefingUnits(state.briefing));
+      const laocMi = laocTxt ? ` (${laocTxt})` : "";
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
@@ -1879,8 +1948,8 @@ function initMainMap(b) {
     // (previously only the hatched excluded fill carried this tooltip, issue #111).
     _mainMap.on("click", "roc-hit", (e) => {
       if (_moveMode) return;
-      const rocR = state.briefing?.roc?.radius_mi;
-      const rocMi = Number.isFinite(rocR) ? ` (${rocR.toFixed(0)} mi)` : "";
+      const rocTxt = radiusText(state.briefing?.roc, briefingUnits(state.briefing));
+      const rocMi = rocTxt ? ` (${rocTxt})` : "";
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
@@ -2211,6 +2280,9 @@ function renderAbout(b) {
     </div>`
   ).join("");
 
+  // Methodology thresholds are authored in US units; localize the condition/note prose to the
+  // briefing's display system so a metric user sees °C / mm consistent with the rest of the app.
+  const aboutSys = briefingUnits(b);
   const thresholds = ABOUT_THRESHOLDS.map(
     ([hz, title, basis, rows, note]) => `<div class="about-haz">
       <div class="about-haz__head">${icon(hz, "about-haz__icon")}<span class="about-haz__title">${esc(title)}</span></div>
@@ -2218,10 +2290,10 @@ function renderAbout(b) {
       <div class="about-matrix">${rows
         .map(([tier, cls, cond]) => `<div class="about-matrix__row">
           <span class="posture-chip ${cls} about-matrix__tier">${esc(displayTier(tier))}</span>
-          <span class="about-matrix__cond">${esc(cond)}</span>
+          <span class="about-matrix__cond">${esc(localizeUnitsText(cond, aboutSys))}</span>
         </div>`)
         .join("")}</div>
-      <p class="about-haz__note">${esc(note)}</p>
+      <p class="about-haz__note">${esc(localizeUnitsText(note, aboutSys))}</p>
     </div>`
   ).join("");
 
@@ -2631,7 +2703,16 @@ function freshenStaleSpec(spec) {
 // Reflect the slider index in the readout ("20 mi") and keep _mpSpec.radius_km in km.
 function updateRocReadout(idx) {
   const el = document.getElementById("mp-radius-value");
-  if (el) el.textContent = `${ROC_STOPS_MI[idx]} mi`;
+  if (el) el.textContent = sliderStopText(ROC_STOPS_MI[idx], prefUnits());
+}
+
+// Rewrite a slider's discrete tick labels for the chosen unit system (stops stay km-backed).
+function setSliderTicks(container, stopsMi, sys) {
+  if (!container) return;
+  const spans = container.querySelectorAll("span");
+  stopsMi.forEach((mi, i) => {
+    if (spans[i]) spans[i].textContent = sys === "metric" ? String(Math.round(mi * MI_TO_KM)) : String(mi);
+  });
 }
 
 // Live preview of the Radius of Concern on the planner map: a fine dashed orange ring
@@ -2847,6 +2928,7 @@ function openMissionPlanner(spec) {
   const rocIdx = nearestRocIndex(rocMiFromSpec(_mpSpec));
   _mpSpec.radius_km = ROC_STOPS_MI[rocIdx] * MI_TO_KM;
   document.getElementById("mp-radius").value = String(rocIdx);
+  setSliderTicks(document.getElementById("mp-radius-ticks"), ROC_STOPS_MI, prefUnits());
   updateRocReadout(rocIdx);
   document.getElementById("mp-search-input").value = "";
   setPlannerStatus("");
@@ -3033,9 +3115,23 @@ function initPlannerControls() {
 }
 
 /* ── Settings (app-wide user prefs) ────────────────────────────────── */
+// The units toggle is a two-button radiogroup; track the pending choice while the sheet
+// is open (committed on Save, like the sliders). Seed from the current pref on open.
+let _settingsUnits = "us";
+function reflectUnitsToggle(sys) {
+  _settingsUnits = sys === "metric" ? "metric" : "us";
+  const us = document.getElementById("settings-units-us");
+  const metric = document.getElementById("settings-units-metric");
+  if (us) us.setAttribute("aria-checked", String(_settingsUnits === "us"));
+  if (metric) metric.setAttribute("aria-checked", String(_settingsUnits === "metric"));
+  // The LAoC slider readout + ticks are distances, so they follow the pending choice live.
+  setSliderTicks(document.getElementById("settings-laoc-ticks"), LAOC_STOPS_MI, _settingsUnits);
+  const laocSlider = document.getElementById("settings-laoc");
+  if (laocSlider) updateLaocReadout(parseInt(laocSlider.value, 10) || 0);
+}
 function updateLaocReadout(idx) {
   const el = document.getElementById("settings-laoc-value");
-  if (el) el.textContent = `${LAOC_STOPS_MI[idx]} mi`;
+  if (el) el.textContent = sliderStopText(LAOC_STOPS_MI[idx], _settingsUnits);
 }
 function updatePhaseReadout(id, idx) {
   const el = document.getElementById(id);
@@ -3046,12 +3142,14 @@ function updatePhaseReadout(id, idx) {
 function openSettings() {
   hideGlossaryPopover();
   const prefs = loadPrefs();
+  reflectUnitsToggle(prefs.units);
   const laocIdx = nearestLaocIndex(laocMiFromPrefs(prefs));
   const approachIdx = nearestPhaseIndex(prefs.approach_hrs ?? PHASE_DEFAULT_HR);
   const egressIdx = nearestPhaseIndex(prefs.egress_hrs ?? PHASE_DEFAULT_HR);
 
   const laocSlider = document.getElementById("settings-laoc");
   if (laocSlider) laocSlider.value = String(laocIdx);
+  setSliderTicks(document.getElementById("settings-laoc-ticks"), LAOC_STOPS_MI, _settingsUnits);
   updateLaocReadout(laocIdx);
 
   const approachSlider = document.getElementById("settings-approach");
@@ -3083,6 +3181,11 @@ function initSettingsControls() {
     if (e.target === e.currentTarget) closeSettings();
   });
 
+  document.getElementById("settings-units-us")
+    ?.addEventListener("click", () => reflectUnitsToggle("us"));
+  document.getElementById("settings-units-metric")
+    ?.addEventListener("click", () => reflectUnitsToggle("metric"));
+
   const laocSlider = document.getElementById("settings-laoc");
   laocSlider?.addEventListener("input", () => {
     updateLaocReadout(parseInt(laocSlider.value, 10) || 0);
@@ -3103,6 +3206,7 @@ function initSettingsControls() {
     const approachIdx = parseInt(approachSlider?.value ?? "1", 10) || 0;
     const egressIdx = parseInt(egressSlider?.value ?? "1", 10) || 0;
     const prefs = loadPrefs();
+    prefs.units = _settingsUnits;
     prefs.laoc_radius_km = LAOC_STOPS_MI[laocIdx] * MI_TO_KM;
     prefs.approach_hrs = PHASE_STOPS_HR[approachIdx];
     prefs.egress_hrs = PHASE_STOPS_HR[egressIdx];

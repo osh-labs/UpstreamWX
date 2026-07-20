@@ -1421,6 +1421,35 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
    its map ring (distinct from the orange RoC/phase sliders). Yellow is scoped by ID so the
    approach/egress sliders remain orange. */
 .settings-body { padding-bottom: var(--space-2); }
+
+/* US/metric segmented toggle — two equal-width buttons; the active one carries the brand
+   fill. Styled off aria-checked so the a11y state and the visual state can never drift. */
+.unit-toggle {
+  display: flex;
+  gap: 0;
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.unit-toggle__btn {
+  flex: 1 1 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease, color var(--motion-fast, 120ms) ease;
+}
+.unit-toggle__btn + .unit-toggle__btn { border-left: 1px solid var(--color-border-strong); }
+.unit-toggle__btn[aria-checked="true"] {
+  background: var(--color-brand);
+  color: var(--color-brand-ink, #06131f);
+}
+.unit-toggle__btn:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+
 #settings-laoc-value { color: #facc15; }
 #settings-laoc::-webkit-slider-thumb { background: #facc15; }
 #settings-laoc::-moz-range-thumb { background: #facc15; }
