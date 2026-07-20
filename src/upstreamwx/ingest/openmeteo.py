@@ -169,9 +169,11 @@ def _build_forecast_hourly(mission: Mission, hourly: dict, window: list[int]) ->
         return arr[i] if i < len(arr) else None
 
     hours: list[str] = []
+    hours_dt: list[datetime] = []
     for i in window:
-        local = datetime.fromisoformat(times[i]) + offset  # times are naive UTC
-        hours.append(local.strftime("%H%M"))
+        valid = datetime.fromisoformat(times[i])  # naive UTC
+        hours_dt.append(valid)
+        hours.append((valid + offset).strftime("%H%M"))
     return ForecastHourly(
         hours=hours,
         temp_f=[at(temp, i) for i in window],
@@ -181,6 +183,7 @@ def _build_forecast_hourly(mission: Mission, hourly: dict, window: list[int]) ->
         precip_pct=[at(ppct, i) for i in window],
         qpf_in=[at(qpf, i) for i in window],
         sky=[_sky_emoji(at(wcode, i)) for i in window],
+        hours_dt=hours_dt,
     )
 
 
@@ -245,6 +248,15 @@ def fetch(mission: Mission, bundle: IngestBundle) -> None:
             bundle.measurable_precip = False if covered else None
         # Display series for the PWA Forecast view (does not feed the engine).
         bundle.forecast_hourly = _build_forecast_hourly(mission, hourly, window)
+        # Per-hour NWS heat index for the display heat graph (FR-6), aligned to the same axis;
+        # the hourly basis of the heat_index_f window-max scalar. None where temp/RH are absent
+        # (a gap, never a benign value — NFR-6). Display only, never an engine input.
+        bundle.heat_index_hourly = [
+            _nws_heat_index(temp[i], rh[i])
+            if i < len(temp) and i < len(rh) and temp[i] is not None and rh[i] is not None
+            else None
+            for i in window
+        ]
     else:
         bundle.measurable_precip = None
         bundle.notes.append(

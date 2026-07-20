@@ -21,7 +21,7 @@ from shapely.geometry.base import BaseGeometry
 from ..engine.models import HazardInputs, Mission
 from ..watershed import clip_watershed, delineate_cached, roc_disk
 from . import gefs_provider, nws, openmeteo, refs_provider, spc
-from .base import IngestBundle, to_hazard_inputs
+from .base import IngestBundle, build_hazard_series, to_hazard_inputs
 
 # Providers that don't need the watershed polygon; (name, module).
 _POINT_PROVIDERS = (nws, openmeteo, spc)
@@ -297,6 +297,12 @@ def gather(
         for future in point_futures:
             _merge_into(bundle, future.result())
         _merge_into(bundle, ensemble_future.result())
+
+    # Resample the raw ensemble + thermal arrays onto the shared mission-clock axis for the PWA
+    # hazard graphs (FR-6). Runs once here, after every branch has merged so both the forecast
+    # axis (Open-Meteo) and the ensemble raw arrays (GEFS/REFS) are present. Display only,
+    # deterministic over the gathered bundle — never re-read by the engine (FR-13, NFR-4).
+    bundle.hazard_series = build_hazard_series(bundle)
 
     failed_mandatory = [s for s in MANDATORY if bundle.sources_ok.get(s) is False]
     if failed_mandatory:

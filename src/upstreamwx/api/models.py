@@ -398,6 +398,71 @@ class RiskInputsView(BaseModel):
     thunderstorm_warning: bool | None = None
 
 
+class SeriesLine(BaseModel):
+    """One plotted line of a hazard graph (display-only, never an engine input, FR-6).
+
+    ``values`` are index-aligned with ``forecast_hourly.hours``; ``None`` is a genuine coverage
+    gap (NFR-6). Floats reject NaN/inf (``FiniteF``) and the list is capped like the other
+    display series (Open-Meteo tops out at 16 forecast-days = 384 h).
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    label: str = Field(max_length=64)
+    unit: str = Field(max_length=8)
+    values: list[FiniteF | None] = Field(default_factory=list, max_length=512)
+
+
+class SeriesBand(BaseModel):
+    """One shaded threshold band on a hazard graph; cut points come from the YAML config (FR-20a).
+
+    ``from``/``class`` are reserved words, so they are stored under safe attribute names with
+    JSON aliases; the API serializes response models by alias, keeping the wire keys ``from`` /
+    ``class`` the frontend expects.
+    """
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    from_: FiniteF = Field(alias="from")
+    to: FiniteF
+    class_: str = Field(alias="class", max_length=32)
+    label: str = Field(max_length=48)
+
+
+class HazardSeriesBlock(BaseModel):
+    """The ``series`` block of a hazard card: a primary line, optional secondary line, bands."""
+
+    model_config = ConfigDict(extra="allow")
+
+    primary: SeriesLine
+    secondary: SeriesLine | None = None
+    bands: list[SeriesBand] | None = Field(default=None, max_length=8)
+
+
+class HazardDetail(BaseModel):
+    """One hazard card of the structured contract (Hazards view + per-hazard graph, FR-6, FR-20).
+
+    Bare-dict-tolerant (``extra='allow'``) so the frozen contract's existing keys pass through,
+    but the new ``series`` block is a bounded typed sub-model (SA-08): the PDF endpoint accepts
+    this schema from a client, so the graph's value lists and band cardinality are capped.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    hazard: str = Field(max_length=32)
+    label: str = Field(max_length=32)
+    severity_class: str = Field(max_length=32)
+    confidence: str = Field(default="Moderate", max_length=16)
+    drivers: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list, max_length=32
+    )
+    logic: str = Field(default="", max_length=4096)
+    assumptions: list[Annotated[str, Field(max_length=500)]] = Field(
+        default_factory=list, max_length=32
+    )
+    series: HazardSeriesBlock | None = None
+
+
 class BriefingResponse(BaseModel):
     """A generated (or cached) briefing and its provenance.
 
@@ -449,8 +514,9 @@ class BriefingResponse(BaseModel):
     )
 
     # Structured view for the PWA (M0.4). See sample-briefing.json for the shape.
-    # (hazard_detail / metrics / timeline / resources stay bare dicts: every value the PDF
-    # template reads from them is HTML-escaped or mapped through a fixed lookup.)
+    # (metrics / timeline / resources stay bare dicts: every value the PDF template reads from
+    # them is HTML-escaped or mapped through a fixed lookup. hazard_detail is a typed sub-model
+    # so the new per-hazard `series` block carries bounded value lists and band cardinality.)
     mission: MissionView = Field(default_factory=MissionView)
     watershed: dict | None = None
     roc: dict | None = Field(default=None, description="Radius-of-Concern ring; null = unbounded")
@@ -462,7 +528,7 @@ class BriefingResponse(BaseModel):
     metrics: list[dict] = Field(default_factory=list, max_length=64)
     phases: list[PhaseCard] = Field(default_factory=list, max_length=16)
     timeline: list[dict] = Field(default_factory=list, max_length=256)
-    hazard_detail: list[dict] = Field(default_factory=list, max_length=64)
+    hazard_detail: list[HazardDetail] = Field(default_factory=list, max_length=64)
     forecast_hourly: ForecastTable = Field(default_factory=ForecastTable)
     temp_series: dict = Field(default_factory=dict, max_length=64)
     wind_series: dict = Field(default_factory=dict, max_length=64)

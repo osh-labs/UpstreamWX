@@ -19,7 +19,7 @@ conservative max over the upstream polygon across the window.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from shapely.geometry.base import BaseGeometry
 
@@ -105,6 +105,15 @@ def _run_label(cycle: RefsCycle) -> str:
     return f"{cycle.date}/{cycle.hh}Z"
 
 
+def _valid_time_iso(cycle: RefsCycle, fhour: int) -> str:
+    """Naive-UTC ISO valid time (cycle init + fhour) — the display series' hour key (FR-6)."""
+    init = cycle.init_time
+    if init.tzinfo is None:
+        init = init.replace(tzinfo=UTC)
+    valid = init + timedelta(hours=fhour)
+    return valid.astimezone(UTC).replace(tzinfo=None).isoformat()
+
+
 def _fhour_range(fhours: list[int]) -> str:
     lo, hi = min(fhours), max(fhours)
     return f"f{lo:02d}" if lo == hi else f"f{lo:02d}-f{hi:02d}"
@@ -166,12 +175,18 @@ def fetch(
         return
 
     # Fetch each distinct (cycle, fhour) once; aggregate the conservative max across the window
-    # (the worst case any covered hour shows over the upstream domain).
+    # (the worst case any covered hour shows over the upstream domain). The per-hour values are
+    # also retained keyed by valid time for the display hazard graphs (FR-6); several (cycle,
+    # fhour) can share a valid hour (a spin-up backfill), so keep the max per valid time. The
+    # window-max scalars are unchanged, so the engine input is identical (NFR-4).
     precip_vals: list[float] = []
     ltng_vals: list[float] = []
+    precip_by_valid: dict[str, float] = {}
+    ltng_by_valid: dict[str, float] = {}
     for cycle, fhour in sorted(
         {(s.cycle, s.fhour) for s in sources}, key=lambda cf: (cf[0].init_time, cf[1])
     ):
+        valid_iso = _valid_time_iso(cycle, fhour)
         if polygon is not None:
             p1 = _domain_max(
                 cycle, fhour, PRECIP_VAR, PRECIP_1H_PROB, polygon,
@@ -184,18 +199,24 @@ def fetch(
             hour_precip = max((v for v in (p1, p3) if v is not None), default=None)
             if hour_precip is not None:
                 precip_vals.append(hour_precip)
+                prev = precip_by_valid.get(valid_iso, hour_precip)
+                precip_by_valid[valid_iso] = max(prev, hour_precip)
 
         ltng = _domain_max(cycle, fhour, LTNG_VAR, LTNG_PROB, ltng_polygon, settings=settings)
         if ltng is None:
             ltng = _domain_max(cycle, fhour, REFC_VAR, REFC_PROB, ltng_polygon, settings=settings)
         if ltng is not None:
             ltng_vals.append(ltng)
+            ltng_by_valid[valid_iso] = max(ltng_by_valid.get(valid_iso, ltng), ltng)
 
     refs_precip = max(precip_vals, default=None)
     refs_ltng = max(ltng_vals, default=None)
 
     bundle.refs_p_precip = refs_precip
     bundle.refs_p_lightning = refs_ltng
+    # Retain the per-forecast-hour series for the display hazard graphs (FR-6, display only).
+    bundle.refs_precip_hourly = precip_by_valid
+    bundle.refs_lightning_hourly = ltng_by_valid
 
     # Provenance: which run(s) and forecast hours actually fed the signal. Group valid times by
     # run; the freshest run is primary, older runs only ever cover the freshest run's spin-up

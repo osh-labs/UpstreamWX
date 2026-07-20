@@ -1067,7 +1067,20 @@
         "AFD excessive-rainfall / flooding discussion concurs"
       ],
       "logic": "Extreme = active Flash Flood Warning; High = Watch OR GEFS \u226560% w/ convective rate; Elevated = GEFS 20\u201359% OR REFS NEP(\u22650.5 in/1 h) 20\u201339% (Appendix B \u00a716.1).",
-      "assumptions": []
+      "assumptions": [],
+      "series": {
+        "primary": {
+          "label": "Ensemble P(precip)",
+          "unit": "%",
+          "values": [30, 35, null, 44, 46, 66, 68, 71, 62, 65]
+        },
+        "secondary": {
+          "label": "Hourly precip prob",
+          "unit": "%",
+          "values": [29, 35, 30, 44, 46, 66, 68, 71, 62, 65]
+        },
+        "bands": null
+      }
     },
     {
       "hazard": "lightning",
@@ -1080,7 +1093,16 @@
         "AFD mentions isolated/scattered afternoon convection"
       ],
       "logic": "Extreme = GEFS P(tstm) \u226580% (\u226585% when REFS in-window) OR REFS P(lightning) \u226545% OR SPC Moderate+ during any exposed phase; High = GEFS 40\u201379% OR REFS 20\u201344%; Elevated = GEFS 15\u201339% OR REFS 8\u201319% OR AFD convective mention (Appendix B \u00a716.2). Cave interior excluded for the technical span (FR-14c).",
-      "assumptions": []
+      "assumptions": [],
+      "series": {
+        "primary": {
+          "label": "Ensemble P(thunder)",
+          "unit": "%",
+          "values": [80, 85, 88, 90, 92, 90, 85, 78, 70, 65]
+        },
+        "secondary": null,
+        "bands": null
+      }
     },
     {
       "hazard": "heat",
@@ -1093,7 +1115,21 @@
       "logic": "Uses NWS Heat Index categories (FR-15): Caution 80\u201390 \u00b0F, Extreme Caution 90\u2013103 \u00b0F, Danger 103\u2013124 \u00b0F, Extreme Danger \u2265125 \u00b0F. Surface hazard only \u2014 cave interior excluded (FR-14c).",
       "assumptions": [
         "Approach involves exertion under load: effective heat strain runs one category hotter than the ambient heat index suggests."
-      ]
+      ],
+      "series": {
+        "primary": {
+          "label": "Heat index",
+          "unit": "°F",
+          "values": [87, 87, 86, 72, 75, 77, 77, 77, 76, 76]
+        },
+        "secondary": null,
+        "bands": [
+          {"from": 80.0, "to": 90.0, "class": "heat-caution", "label": "Caution"},
+          {"from": 90.0, "to": 103.0, "class": "heat-ext-caution", "label": "Extreme Caution"},
+          {"from": 103.0, "to": 125.0, "class": "heat-danger", "label": "Danger"},
+          {"from": 125.0, "to": 150.0, "class": "heat-ext-danger", "label": "Extreme Danger"}
+        ]
+      }
     },
     {
       "hazard": "cold_wet",
@@ -1106,7 +1142,20 @@
       "logic": "Minimal = apparent temp >60 \u00b0F for a wet party (Appendix B \u00a716.4). Elevated band starts below 60 \u00b0F. Bands are warmer than dry-cold thresholds because wet clothing loses insulation.",
       "assumptions": [
         "Assumes a wet party on egress (FR-16)."
-      ]
+      ],
+      "series": {
+        "primary": {
+          "label": "Apparent temp",
+          "unit": "\u00b0F",
+          "values": [87, 87, 86, 72, 75, 77, 77, 77, 76, 76]
+        },
+        "secondary": null,
+        "bands": [
+          {"from": -60.0, "to": 32.0, "class": "sev-extreme", "label": "Extreme"},
+          {"from": 32.0, "to": 45.0, "class": "sev-high", "label": "High"},
+          {"from": 45.0, "to": 60.0, "class": "sev-elevated", "label": "Elevated"}
+        ]
+      }
     }
   ],
   "forecast_hourly": {
