@@ -767,24 +767,21 @@ function postureChip(label, sevClass, big = false) {
 }
 
 function confidenceTag(level, big = false) {
-  // Signal-bar style: three discrete bars of ascending height (short→tall), the
-  // filled count reading confidence like a signal-strength meter. Low = 1 filled,
-  // moderate = 2, high = all 3 (FR-36). Fill is *neutral* (never a severity hue):
-  // confidence is shape, not color, so it can't be mistaken for a hazard tier.
+  // Three equal-height bars (not stair-stepped) with the level label on the same
+  // line: filled count reads confidence — Low = 1, Moderate = 2, High = 3 (FR-36).
+  // Fill is *neutral* (never a severity hue) so confidence is read from shape, not
+  // color, and can't be mistaken for a hazard tier. The hero (`big`) variant uses
+  // larger bars stacked above the label (CSS); everywhere else is the compact
+  // inline row.
   const k = String(level).toLowerCase();
   const activeCount = k === "low" ? 1 : k === "moderate" ? 2 : 3;
-  const vW = 100, vH = 18, gap = 6;
-  const bW = (vW - 2 * gap) / 3;
-  const heights = [0.5, 0.75, 1]; // ascending: taller bar = stronger signal
-  const bars = [0, 1, 2].map((i) => {
-    const xL = i * (bW + gap);
-    const h = vH * heights[i], yT = vH - h;
-    const fill = i < activeCount ? "var(--color-text-secondary)" : "var(--color-surface-3)";
-    return `<rect x="${xL.toFixed(1)}" y="${yT.toFixed(1)}" width="${bW.toFixed(1)}" height="${h.toFixed(1)}" rx="2" fill="${fill}"/>`;
-  }).join("");
-  return `<div class="confidence ${big ? "is-lg" : ""}" title="${esc(level)} confidence">
-    <svg class="confidence__bars" viewBox="0 0 ${vW} ${vH}" aria-hidden="true">${bars}</svg>
-    <div class="confidence__label">${esc(level)} confidence</div>
+  const label = k.charAt(0).toUpperCase() + k.slice(1) + " confidence";
+  const bars = [0, 1, 2]
+    .map((i) => `<span class="confidence__bar confidence__bar--${i < activeCount ? "on" : "off"}"></span>`)
+    .join("");
+  return `<div class="confidence ${big ? "is-lg" : ""}" title="${esc(label)}">
+    <span class="confidence__label">${esc(label)}</span>
+    <span class="confidence__bars" aria-hidden="true">${bars}</span>
   </div>`;
 }
 
