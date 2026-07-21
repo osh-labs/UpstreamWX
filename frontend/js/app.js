@@ -329,21 +329,6 @@ function displayLeadLabel(s) {
   return s.replace(/— (.+)$/, (_, t) => `— ${displayTier(t)}`);
 }
 
-// Single-pass replacement of all configured label strings in backend-authored text
-// (threshold logic, driver copy). Sorts longest key first so "Extreme Caution"
-// matches before "Extreme", avoiding double-substitution.
-function displayLogic(s) {
-  const entries = Object.entries(TIER_LABELS)
-    .filter(([k, v]) => k !== v)
-    .sort(([a], [b]) => b.length - a.length);
-  if (!entries.length) return s;
-  const re = new RegExp(
-    `\\b(${entries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
-    "g"
-  );
-  return s.replace(re, (m) => TIER_LABELS[m] ?? m);
-}
-
 /* ── Acronym glossary (Resources card + tap-to-define) ─────────────────
  * Definitions for the acronyms that show up in the BLUF/SITREP and hazard
  * cards. Surfaced two ways: a glossary card in Resources and inline
@@ -934,6 +919,22 @@ function playViewEnter(view, dir) {
   view.classList.remove("is-entering", "enter-fwd", "enter-back");
   void view.offsetWidth; // reflow so the animation replays
   view.classList.add("is-entering", dir === "back" ? "enter-back" : "enter-fwd");
+  rearmLiveChips(view);
+}
+
+// Re-arm the hero posture-chip pulse when its view is shown again. Hiding a view
+// (display:none) cancels descendant CSS animations, and some engines (WebKit) do
+// not reliably restart an infinite animation when the view returns — so the pulse
+// would silently die on the first tab away-and-back. Clearing the animation and
+// forcing a reflow restarts it from the stylesheet rule, which keeps it running
+// for the life of the briefing. Reverting to '' (not a literal keyframe) means a
+// reduced-motion user, whose rule lives behind a no-preference guard, stays still.
+function rearmLiveChips(view) {
+  view.querySelectorAll(".posture-chip.is-live").forEach((el) => {
+    el.style.animation = "none";
+    void el.offsetWidth; // reflow
+    el.style.animation = "";
+  });
 }
 
 /* ── 7.4 Overview ──────────────────────────────────────────────────── */
@@ -1319,39 +1320,6 @@ function barClass(cell) {
   return `timeline__bar bar-${cell.severity} ${w} ${conf}`;
 }
 
-// Render only the threshold-logic entry for the current posture.  If the logic
-// string has semicolon-separated "Tier = condition" entries (flash_flood style),
-// extract the matching one; for Minimal (not listed), frame it as "below the
-// lowest defined threshold".  Single-block logic (heat, lightning) is shown as-is.
-function thresholdLogicHtml(logic, currentLabel = "") {
-  const normalized = displayLogic(String(logic))
-    .replace(/\s*\((?:Appendix B|§)[^)]*\)/g, "")
-    .replace(/\s*\(FR-\d+[a-z]?\)/g, "");
-
-  const entries = normalized.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
-
-  if (entries.length <= 1) {
-    // Non-tiered copy (heat, lightning, cold_wet full block) — show as-is.
-    return `<ul class="logic-list"><li>${esc(normalized)}</li></ul>`;
-  }
-
-  if (currentLabel) {
-    // Try matching "Label = …" or "Label: …" at the start of any entry.
-    const pat = new RegExp(`^${currentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[=:]`, "i");
-    const hit = entries.find((e) => pat.test(e));
-    if (hit) return `<ul class="logic-list"><li>${esc(hit)}</li></ul>`;
-
-    // Label not found (Minimal tier absent from the logic) — frame as "below
-    // the lowest defined threshold", which is the last semicolon entry.
-    const lowestDefined = entries[entries.length - 1];
-    if (lowestDefined) {
-      return `<ul class="logic-list"><li>Below: ${esc(lowestDefined)}</li></ul>`;
-    }
-  }
-
-  return `<ul class="logic-list">${entries.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
-}
-
 // Per-hazard forecast-trend chart (Hazards tab detail card). Reads the FROZEN `series`
 // block on each hazard_detail (primary/secondary/bands), all index-aligned 1:1 to
 // forecast_hourly.hours. The line is the hazard's tier color; heat draws over its bands so
@@ -1426,18 +1394,21 @@ function renderHazards(b) {
 
   const details = b.hazard_detail
     .map(
+      // Confidence sits in the summary (stacked under the posture chip), so it is
+      // visible above the fold before the card is expanded — you can read posture
+      // *and* confidence at a glance without opening every hazard.
       (h) => `<details class="hazard-detail" data-hazard="${esc(h.hazard)}">
       <summary class="hazard-detail__summary">
         ${icon(h.hazard, "icon")}
         <span class="hazard-detail__name">${HAZARD_LABELS[h.hazard]}</span>
-        ${postureChip(displayTier(h.label), h.severity_class)}
+        <div class="hazard-detail__meta">
+          ${postureChip(displayTier(h.label), h.severity_class)}
+          ${confidenceTag(h.confidence)}
+        </div>
         ${icon("chevron", "hazard-detail__chev")}
       </summary>
       <div class="hazard-detail__body">
-        <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
-        <h4>Threshold logic</h4>
-        ${thresholdLogicHtml(h.logic, h.label)}
         <h4>Forecast trend</h4>
         ${hazardChart(h, chartHours)}
         ${h.assumptions.map((a) => `<div class="assumption">${icon("alert", "")}<span>${esc(a)}</span></div>`).join("")}
@@ -1458,7 +1429,33 @@ function renderHazards(b) {
     <div style="display:flex;flex-direction:column;gap:var(--space-2)">${details}</div>
     <div class="disclaimer">Severity on the UpstreamWX ladder (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(" / ")}). Confidence shown as hatching and an explicit label; bar length distinguishes persistent hazards from time-windowed hazards (display only).</div>`;
   flushChartInits();
+  // Expanding a card should reveal it fully: scroll the view so the whole card is
+  // in frame. The <details> toggle event fires after layout reflows, so the card's
+  // expanded height is measured correctly.
+  document.querySelectorAll("#view-hazards .hazard-detail[data-hazard]").forEach((el) =>
+    el.addEventListener("toggle", () => { if (el.open) scrollCardIntoView(el); })
+  );
   linkifyAcronyms(document.getElementById("view-hazards"));
+}
+
+// Scroll the mission view minimally so `card` is fully visible. When the card is
+// taller than the viewport it top-aligns (the drivers/logic you just revealed);
+// otherwise it brings the clipped edge into frame. Respects reduced motion.
+function scrollCardIntoView(card) {
+  const main = document.querySelector("main");
+  if (!main) return;
+  const pad = 8;
+  const m = main.getBoundingClientRect();
+  const c = card.getBoundingClientRect();
+  let delta = 0;
+  if (c.height > m.height || c.top < m.top) {
+    delta = c.top - m.top - pad;            // top-align (tall card, or clipped above)
+  } else if (c.bottom > m.bottom) {
+    delta = c.bottom - m.bottom + pad;      // reveal the clipped bottom edge
+  }
+  if (!delta) return;
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  main.scrollBy({ top: delta, behavior: reduced ? "auto" : "smooth" });
 }
 
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
