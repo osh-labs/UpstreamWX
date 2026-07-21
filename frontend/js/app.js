@@ -1426,15 +1426,20 @@ function renderHazards(b) {
 
   const details = b.hazard_detail
     .map(
+      // Confidence sits in the summary (stacked under the posture chip), so it is
+      // visible above the fold before the card is expanded — you can read posture
+      // *and* confidence at a glance without opening every hazard.
       (h) => `<details class="hazard-detail" data-hazard="${esc(h.hazard)}">
       <summary class="hazard-detail__summary">
         ${icon(h.hazard, "icon")}
         <span class="hazard-detail__name">${HAZARD_LABELS[h.hazard]}</span>
-        ${postureChip(displayTier(h.label), h.severity_class)}
+        <div class="hazard-detail__meta">
+          ${postureChip(displayTier(h.label), h.severity_class)}
+          ${confidenceTag(h.confidence)}
+        </div>
         ${icon("chevron", "hazard-detail__chev")}
       </summary>
       <div class="hazard-detail__body">
-        <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
         <h4>Threshold logic</h4>
         ${thresholdLogicHtml(h.logic, h.label)}
@@ -1458,7 +1463,33 @@ function renderHazards(b) {
     <div style="display:flex;flex-direction:column;gap:var(--space-2)">${details}</div>
     <div class="disclaimer">Severity on the UpstreamWX ladder (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(" / ")}). Confidence shown as hatching and an explicit label; bar length distinguishes persistent hazards from time-windowed hazards (display only).</div>`;
   flushChartInits();
+  // Expanding a card should reveal it fully: scroll the view so the whole card is
+  // in frame. The <details> toggle event fires after layout reflows, so the card's
+  // expanded height is measured correctly.
+  document.querySelectorAll("#view-hazards .hazard-detail[data-hazard]").forEach((el) =>
+    el.addEventListener("toggle", () => { if (el.open) scrollCardIntoView(el); })
+  );
   linkifyAcronyms(document.getElementById("view-hazards"));
+}
+
+// Scroll the mission view minimally so `card` is fully visible. When the card is
+// taller than the viewport it top-aligns (the drivers/logic you just revealed);
+// otherwise it brings the clipped edge into frame. Respects reduced motion.
+function scrollCardIntoView(card) {
+  const main = document.querySelector("main");
+  if (!main) return;
+  const pad = 8;
+  const m = main.getBoundingClientRect();
+  const c = card.getBoundingClientRect();
+  let delta = 0;
+  if (c.height > m.height || c.top < m.top) {
+    delta = c.top - m.top - pad;            // top-align (tall card, or clipped above)
+  } else if (c.bottom > m.bottom) {
+    delta = c.bottom - m.bottom + pad;      // reveal the clipped bottom edge
+  }
+  if (!delta) return;
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  main.scrollBy({ top: delta, behavior: reduced ? "auto" : "smooth" });
 }
 
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
