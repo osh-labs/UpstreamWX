@@ -593,68 +593,75 @@ function warmWatershedDebounced(lat, lon) {
   }, 350);
 }
 
-// Stream the Haiku plain-language narrative into the Risk Discussion card.
+// Populate the Haiku plain-language narrative into the Risk Discussion card.
 // Called immediately after renderAll(); runs in the background without blocking the UI.
-// If the server returns 204 (no API key) the card is hidden; on any error it is removed.
-function streamSummary(spec) {
-  if (DEMO_MODE) return; // sample data already has b.summary; nothing to stream
+// The live briefing arrives with summary=null (framing is a separate call), so this
+// card depends entirely on the frame endpoint. The card is hidden only when framing is
+// genuinely unavailable (204 / error / empty); otherwise it is populated.
+//
+// We read the whole SSE response at once (res.text()) rather than incrementally via
+// res.body.getReader(): iOS Safari's fetch stream-reader is unreliable and would throw
+// mid-read, sending this straight to the hide path — which is why the card vanished on
+// iOS while rendering fine in Blink. A one-shot read is well-supported everywhere; the
+// summary simply appears when ready instead of typing in.
+async function streamSummary(spec) {
+  if (DEMO_MODE) return; // sample data already has b.summary; nothing to fetch
   const card = document.getElementById("risk-discussion");
   const textEl = document.getElementById("risk-discussion-text");
   if (!card || !textEl) return;
 
   const prefs = loadPrefs();
-  const body = {
+  const payload = {
     ...spec,
     approach_end: addHoursLocal(spec.start, prefs.approach_hrs ?? PHASE_DEFAULT_HR),
     egress_start: addHoursLocal(spec.end, -(prefs.egress_hrs ?? PHASE_DEFAULT_HR)),
     lightning_radius_km: prefs.laoc_radius_km,
     units: prefUnits(),
   };
-
-  fetch(API_FRAME, {
+  const opts = () => ({
     method: "POST",
     headers: { "content-type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify(body),
-  }).then(async (res) => {
-    if (res.status === 204 || !res.ok || !res.body) {
+    body: JSON.stringify(payload),
+  });
+  // Concatenate the text from the SSE "data: {json}" events in a completed frame body.
+  const parseFrameText = (raw) => {
+    let text = "";
+    for (const part of String(raw).split("\n\n")) {
+      if (!part.startsWith("data: ")) continue;
+      let evt;
+      try { evt = JSON.parse(part.slice(6)); } catch (_) { continue; }
+      if (evt.text) text += evt.text;
+    }
+    return text;
+  };
+
+  try {
+    await ensureSession(); // the frame endpoint is session-gated (SA-01); make sure the cookie exists
+    let res = await fetch(API_FRAME, opts());
+    if (res.status === 401) {
+      // Session missing/expired (e.g. a boot race) — re-mint once and retry, like postBriefing.
+      await ensureSession(true);
+      res = await fetch(API_FRAME, opts());
+    }
+    if (res.status === 204 || !res.ok) {
+      card.hidden = true; // framing genuinely unavailable (no API key / server error)
+      return;
+    }
+    const text = parseFrameText(await res.text());
+    if (!text) {
       card.hidden = true;
       return;
     }
-    textEl.textContent = ""; // clear loading placeholder
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    let text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      // SSE events are separated by double newlines.
-      const parts = buf.split("\n\n");
-      buf = parts.pop(); // keep trailing incomplete chunk
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
-        let evt;
-        try { evt = JSON.parse(part.slice(6)); } catch (_) { continue; }
-        if (evt.done) {
-          // Streaming complete — append the framing attribution.
-          const note = document.createElement("span");
-          note.className = "framed-by";
-          note.textContent =
-            "Summary wording only — all posture and severity values are deterministic engine output, not model-derived.";
-          textEl.after(note);
-          return;
-        }
-        if (evt.text) {
-          text += evt.text;
-          textEl.textContent = text;
-        }
-      }
-    }
-  }).catch(() => {
-    if (card) card.hidden = true;
-  });
+    textEl.textContent = text;
+    const note = document.createElement("span");
+    note.className = "framed-by";
+    note.textContent =
+      "Summary wording only — all posture and severity values are deterministic engine output, not model-derived.";
+    textEl.after(note);
+  } catch (_) {
+    card.hidden = true;
+  }
 }
 
 // Load the bundled sample (demo builds and ?demo only).
