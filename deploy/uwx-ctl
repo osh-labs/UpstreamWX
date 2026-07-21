@@ -42,7 +42,14 @@ _run_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 _deploy_env() {
     # Run one of the deploy scripts with this env's config selected.
     local script="$1"; shift
-    [ -x "$SCRIPTS/$script" ] || { echo "error: $SCRIPTS/$script not found — is a release active?" >&2; exit 1; }
+    # The SA-06 release tree is chmod o= (root:group, no access for "other"), so the invoking
+    # user usually cannot even traverse into current/deploy/. This existence check must run at
+    # the SAME privilege as the exec below (root) — as the unprivileged user it always failed
+    # with "not found — is a release active?" even though root can run the script fine.
+    if ! _run_root test -x "$SCRIPTS/$script"; then
+        echo "error: $SCRIPTS/$script not found or not executable — is a release active?" >&2
+        exit 1
+    fi
     _run_root env DEPLOY_CONFIG="$CTL_CONFIG" "$SCRIPTS/$script" "$@"
 }
 
