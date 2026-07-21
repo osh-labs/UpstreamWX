@@ -13,6 +13,7 @@ import json
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from shapely.geometry import Polygon
 
 from upstreamwx.engine.assess import assess
@@ -181,6 +182,46 @@ def test_roc_clip_surfaces_clipped_geometry_and_ring() -> None:
     assert s["roc"]["center"] == [mission.lon, mission.lat]
     assert s["roc"]["geometry"]["type"] == "Polygon"
     assert s["mission"]["radius_km"] == 1.0
+
+
+def _generated_units(units: str) -> GeneratedBriefing:
+    mission, inputs = _mission(), _inputs()
+    result = assess(mission, inputs)
+    return GeneratedBriefing(
+        markdown="# stub\n",
+        result=result,
+        generated_at=datetime(2026, 6, 20, 12, 0, tzinfo=UTC),
+        framed=False,
+        bundle=_bundle(),
+        units=units,
+    )
+
+
+def test_metric_units_convert_values_labels_and_echo_system() -> None:
+    """A metric request converts every displayed value + label; US stays byte-identical (NFR-4)."""
+    us = to_structured(_generated_units("us"), cached=False, cache_cycle="c")
+    me = to_structured(_generated_units("metric"), cached=False, cache_cycle="c")
+
+    assert us["units"] == "us" and me["units"] == "metric"
+
+    # Metric cards: °C / km/h labels, converted values; percentages untouched.
+    us_m = {m["label"]: m for m in us["metrics"]}
+    me_m = {m["label"]: m for m in me["metrics"]}
+    assert us_m["Temp"]["unit"] == "°F" and me_m["Temp"]["unit"] == "°C"
+    assert us_m["Temp"]["value"] == "85" and me_m["Temp"]["value"] == "29"  # (85-32)*5/9
+    assert me_m["Wind"]["unit"] == "km/h"
+    assert me_m["T-storm"]["unit"] == "%"  # dimensionless, unchanged
+
+    # Forecast row labels carry the system's units; the temp series is converted.
+    me_labels = [r["label"] for r in me["forecast_hourly"]["rows"]]
+    assert "Temp °C" in me_labels and "Wind km/h" in me_labels and "QPF mm" in me_labels
+    assert us["temp_series"]["air"] == [70.0, 80.0, 85.0]
+    assert me["temp_series"]["air"] == [pytest.approx(21.1), pytest.approx(26.7),
+                                        pytest.approx(29.4)]
+
+    # Watershed area carries both companions regardless of system; the PWA picks one.
+    assert us["watershed"]["area_sq_mi"] == 5.0
+    assert us["watershed"]["area_km2"] == round(12.95, 1)
 
 
 def test_offline_path_degrades_gracefully() -> None:

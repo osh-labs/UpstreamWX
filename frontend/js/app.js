@@ -78,7 +78,66 @@ const DEFAULT_PREFS = {
   laoc_radius_km: LAOC_DEFAULT_MI * MI_TO_KM,
   approach_hrs: PHASE_DEFAULT_HR,
   egress_hrs: PHASE_DEFAULT_HR,
+  units: "us", // display system: "us" customary or "metric" (FR-9); sent with each briefing
 };
+
+// -- Display units -----------------------------------------------------------------
+// The briefing is rendered server-side in the requested system, so the JSON already
+// carries converted values (temps, wind, precip) and unit-bearing labels. The PWA only
+// needs the system to (a) pick the few labels it authors itself (chart titles, the risk
+// card, area/radius readouts) and (b) drive the pref-only chrome (sliders, map, About).
+// Data labels read the briefing's own `units` so they track the data even in demo mode;
+// chrome reads the saved preference.
+const IN_TO_MM = 25.4;
+function briefingUnits(b) {
+  return b && b.units === "metric" ? "metric" : "us";
+}
+function prefUnits() {
+  return loadPrefs().units === "metric" ? "metric" : "us";
+}
+// Unit label lookups keyed by system.
+const UNIT_LABELS = {
+  us: { temp: "°F", wind: "mph", rate: "in/hr", dist: "mi", area: "mi²", elev: "ft" },
+  metric: { temp: "°C", wind: "km/h", rate: "mm/hr", dist: "km", area: "km²", elev: "m" },
+};
+function unitLabel(sys, kind) {
+  return (UNIT_LABELS[sys] || UNIT_LABELS.us)[kind];
+}
+// Watershed area value + label for a system (the contract carries both companions, FR-3).
+function areaText(ws, sys) {
+  if (!ws) return "";
+  if (sys === "metric" && Number.isFinite(ws.area_km2)) return `${ws.area_km2.toFixed(1)} km²`;
+  if (Number.isFinite(ws.area_sq_mi)) return `${ws.area_sq_mi.toFixed(1)} mi²`;
+  return "";
+}
+// Radius readout for a roc/laoc ring in the chosen system (both companions are emitted).
+function radiusText(ring, sys) {
+  if (!ring) return "";
+  if (sys === "metric" && Number.isFinite(ring.radius_km)) return `${ring.radius_km.toFixed(0)} km`;
+  if (Number.isFinite(ring.radius_mi)) return `${ring.radius_mi.toFixed(0)} mi`;
+  return "";
+}
+// Slider readout for a mile-based stop shown in the chosen system (stops are stored km).
+function sliderStopText(mi, sys) {
+  return sys === "metric" ? `${Math.round(mi * MI_TO_KM)} km` : `${mi} mi`;
+}
+// Localize native-unit tokens in static/methodology prose (mirrors the backend
+// units.localize_units_text). Metric only; range-aware so "80 to 90 °F" converts both
+// bounds. Percentages, J/kg, and the preposition "in" are left untouched.
+function _fToC(f) { return Math.round((parseFloat(f) - 32) * 5 / 9); }
+function localizeUnitsText(text, sys) {
+  if (sys !== "metric" || !text) return text;
+  return text
+    .replace(/(-?\d+(?:\.\d+)?)(\s+to\s+)(-?\d+(?:\.\d+)?)\s*°F/g,
+      (_, a, mid, b) => `${_fToC(a)}${mid}${_fToC(b)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*[–-]\s*(-?\d+(?:\.\d+)?)\s*°F/g,
+      (_, a, b) => `${_fToC(a)}–${_fToC(b)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*°F/g, (_, a) => `${_fToC(a)} °C`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*mph\b/g, (_, a) => `${Math.round(parseFloat(a) * MI_TO_KM)} km/h`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*in\/hr\b/g, (_, a) => `${Math.round(parseFloat(a) * IN_TO_MM)} mm/hr`)
+    .replace(/(-?\d+(?:\.\d+)?)\s*in\/(\d+)\s*h\b/g,
+      (_, a, n) => `${Math.round(parseFloat(a) * IN_TO_MM)} mm/${n} h`);
+}
 
 function loadPrefs() {
   let saved = null;
@@ -268,21 +327,6 @@ function displayTier(t) {
 // Remaps the tier portion of a "Hazard — Tier" lead-label string.
 function displayLeadLabel(s) {
   return s.replace(/— (.+)$/, (_, t) => `— ${displayTier(t)}`);
-}
-
-// Single-pass replacement of all configured label strings in backend-authored text
-// (threshold logic, driver copy). Sorts longest key first so "Extreme Caution"
-// matches before "Extreme", avoiding double-substitution.
-function displayLogic(s) {
-  const entries = Object.entries(TIER_LABELS)
-    .filter(([k, v]) => k !== v)
-    .sort(([a], [b]) => b.length - a.length);
-  if (!entries.length) return s;
-  const re = new RegExp(
-    `\\b(${entries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
-    "g"
-  );
-  return s.replace(re, (m) => TIER_LABELS[m] ?? m);
 }
 
 /* ── Acronym glossary (Resources card + tap-to-define) ─────────────────
@@ -486,6 +530,7 @@ async function postBriefing(spec) {
     approach_end: approachEnd,
     egress_start: egressStart,
     lightning_radius_km: prefs.laoc_radius_km,
+    units: prefUnits(),
   };
   const opts = {
     method: "POST",
@@ -548,67 +593,75 @@ function warmWatershedDebounced(lat, lon) {
   }, 350);
 }
 
-// Stream the Haiku plain-language narrative into the Risk Discussion card.
+// Populate the Haiku plain-language narrative into the Risk Discussion card.
 // Called immediately after renderAll(); runs in the background without blocking the UI.
-// If the server returns 204 (no API key) the card is hidden; on any error it is removed.
-function streamSummary(spec) {
-  if (DEMO_MODE) return; // sample data already has b.summary; nothing to stream
+// The live briefing arrives with summary=null (framing is a separate call), so this
+// card depends entirely on the frame endpoint. The card is hidden only when framing is
+// genuinely unavailable (204 / error / empty); otherwise it is populated.
+//
+// We read the whole SSE response at once (res.text()) rather than incrementally via
+// res.body.getReader(): iOS Safari's fetch stream-reader is unreliable and would throw
+// mid-read, sending this straight to the hide path — which is why the card vanished on
+// iOS while rendering fine in Blink. A one-shot read is well-supported everywhere; the
+// summary simply appears when ready instead of typing in.
+async function streamSummary(spec) {
+  if (DEMO_MODE) return; // sample data already has b.summary; nothing to fetch
   const card = document.getElementById("risk-discussion");
   const textEl = document.getElementById("risk-discussion-text");
   if (!card || !textEl) return;
 
   const prefs = loadPrefs();
-  const body = {
+  const payload = {
     ...spec,
     approach_end: addHoursLocal(spec.start, prefs.approach_hrs ?? PHASE_DEFAULT_HR),
     egress_start: addHoursLocal(spec.end, -(prefs.egress_hrs ?? PHASE_DEFAULT_HR)),
     lightning_radius_km: prefs.laoc_radius_km,
+    units: prefUnits(),
   };
-
-  fetch(API_FRAME, {
+  const opts = () => ({
     method: "POST",
     headers: { "content-type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify(body),
-  }).then(async (res) => {
-    if (res.status === 204 || !res.ok || !res.body) {
+    body: JSON.stringify(payload),
+  });
+  // Concatenate the text from the SSE "data: {json}" events in a completed frame body.
+  const parseFrameText = (raw) => {
+    let text = "";
+    for (const part of String(raw).split("\n\n")) {
+      if (!part.startsWith("data: ")) continue;
+      let evt;
+      try { evt = JSON.parse(part.slice(6)); } catch (_) { continue; }
+      if (evt.text) text += evt.text;
+    }
+    return text;
+  };
+
+  try {
+    await ensureSession(); // the frame endpoint is session-gated (SA-01); make sure the cookie exists
+    let res = await fetch(API_FRAME, opts());
+    if (res.status === 401) {
+      // Session missing/expired (e.g. a boot race) — re-mint once and retry, like postBriefing.
+      await ensureSession(true);
+      res = await fetch(API_FRAME, opts());
+    }
+    if (res.status === 204 || !res.ok) {
+      card.hidden = true; // framing genuinely unavailable (no API key / server error)
+      return;
+    }
+    const text = parseFrameText(await res.text());
+    if (!text) {
       card.hidden = true;
       return;
     }
-    textEl.textContent = ""; // clear loading placeholder
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buf = "";
-    let text = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buf += decoder.decode(value, { stream: true });
-      // SSE events are separated by double newlines.
-      const parts = buf.split("\n\n");
-      buf = parts.pop(); // keep trailing incomplete chunk
-      for (const part of parts) {
-        if (!part.startsWith("data: ")) continue;
-        let evt;
-        try { evt = JSON.parse(part.slice(6)); } catch (_) { continue; }
-        if (evt.done) {
-          // Streaming complete — append the framing attribution.
-          const note = document.createElement("span");
-          note.className = "framed-by";
-          note.textContent =
-            "Summary wording only — all posture and severity values are deterministic engine output, not model-derived.";
-          textEl.after(note);
-          return;
-        }
-        if (evt.text) {
-          text += evt.text;
-          textEl.textContent = text;
-        }
-      }
-    }
-  }).catch(() => {
-    if (card) card.hidden = true;
-  });
+    textEl.textContent = text;
+    const note = document.createElement("span");
+    note.className = "framed-by";
+    note.textContent =
+      "Summary wording only — all posture and severity values are deterministic engine output, not model-derived.";
+    textEl.after(note);
+  } catch (_) {
+    card.hidden = true;
+  }
 }
 
 // Load the bundled sample (demo builds and ?demo only).
@@ -712,34 +765,48 @@ function hideBusyBanner() {
 
 /* ── Small render helpers ──────────────────────────────────────────── */
 function postureChip(label, sevClass, big = false) {
-  return `<span class="posture-chip ${sevClass} ${big ? "is-lg" : ""}">${esc(label)}</span>`;
+  // A slow opacity pulse draws the eye to the worst posture, but only on the
+  // large overall/hero chip and only for the top two tiers — restraint keeps the
+  // "quiet chrome, loud severity" balance and avoids a screen of blinking pills.
+  // Disabled entirely under prefers-reduced-motion (CSS).
+  const live = big && (sevClass === "sev-extreme" || sevClass === "sev-high") ? " is-live" : "";
+  return `<span class="posture-chip ${sevClass}${live} ${big ? "is-lg" : ""}">${esc(label)}</span>`;
 }
 
 function confidenceTag(level, big = false) {
-  // SVG signal-bar style: three bars whose tops share a single diagonal line,
-  // so bar i's right top and bar (i+1)'s left top are continuous (no jump).
-  // Low = 1 filled, moderate = 2, high = all 3 (FR-36).
+  // Three equal-height bars (not stair-stepped) with the level label on the same
+  // line: filled count reads confidence — Low = 1, Moderate = 2, High = 3 (FR-36).
+  // Fill is *neutral* (never a severity hue) so confidence is read from shape, not
+  // color, and can't be mistaken for a hazard tier. The hero (`big`) variant uses
+  // larger bars stacked above the label (CSS); everywhere else is the compact
+  // inline row.
   const k = String(level).toLowerCase();
   const activeCount = k === "low" ? 1 : k === "moderate" ? 2 : 3;
-  const vW = 100, vH = 18, gap = 4;
-  const bW = (vW - 2 * gap) / 3;
-  // Diagonal: y = y0 × (vW − x) / vW, passing from y0 at x=0 to 0 at x=vW.
-  // y0=14 gives bar 0 a 4 px minimum height; bar 2's right edge reaches full vH.
-  const y0 = 14;
-  const diagY = (x) => y0 * (vW - x) / vW;
-  const bars = [0, 1, 2].map((i) => {
-    const xL = i * (bW + gap), xR = xL + bW;
-    const yTL = diagY(xL), yTR = Math.max(0, diagY(xR));
-    const fill = i < activeCount ? "var(--sev-high)" : "var(--color-surface-3)";
-    return `<polygon points="${xL.toFixed(1)},${vH} ${xR.toFixed(1)},${vH} ${xR.toFixed(1)},${yTR.toFixed(1)} ${xL.toFixed(1)},${yTL.toFixed(1)}" fill="${fill}"/>`;
-  }).join("");
-  return `<div class="confidence ${big ? "is-lg" : ""}" title="${esc(level)} confidence">
-    <svg class="confidence__bars" viewBox="0 0 ${vW} ${vH}" aria-hidden="true">${bars}</svg>
-    <div class="confidence__label">${esc(level)} confidence</div>
+  const label = k.charAt(0).toUpperCase() + k.slice(1) + " confidence";
+  const bars = [0, 1, 2]
+    .map((i) => `<span class="confidence__bar confidence__bar--${i < activeCount ? "on" : "off"}"></span>`)
+    .join("");
+  return `<div class="confidence ${big ? "is-lg" : ""}" title="${esc(label)}">
+    <span class="confidence__label">${esc(label)}</span>
+    <span class="confidence__bars" aria-hidden="true">${bars}</span>
   </div>`;
 }
 
 /* ── 7.1/7.3 Header + mission card ─────────────────────────────────── */
+// Lift the header with a soft drop-shadow once the view body scrolls, so the
+// sticky chrome separates from the content beneath it. Idempotent per state.
+let _headerScrolled = false;
+function setHeaderScrolled(on) {
+  if (on === _headerScrolled) return;
+  _headerScrolled = on;
+  document.getElementById("header")?.classList.toggle("is-scrolled", on);
+}
+function initHeaderScrollShadow() {
+  const main = document.querySelector("main");
+  if (!main) return;
+  main.addEventListener("scroll", () => setHeaderScrolled(main.scrollTop > 4), { passive: true });
+}
+
 function renderHeader(b) {
   const m = b.mission;
   const actSrc = m.activity === "cave" ? "icons/cave.png" : "icons/canyon.png";
@@ -753,7 +820,15 @@ function renderHeader(b) {
       ${icon("reload", "header-reload__icon")}
     </button>
   `;
-  document.getElementById("header-reload").addEventListener("click", () => window.location.reload());
+  const reloadBtn = document.getElementById("header-reload");
+  reloadBtn.addEventListener("click", () => {
+    // Spin the icon for a beat to acknowledge the tap, then reload. Skip the
+    // delay when the user prefers reduced motion — reload immediately.
+    const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+    if (reduced) return window.location.reload();
+    reloadBtn.classList.add("is-spinning");
+    setTimeout(() => window.location.reload(), 320);
+  });
 }
 
 function missionCard(b) {
@@ -772,7 +847,7 @@ function missionCard(b) {
           <h1 class="mission-card__title">${esc(m.name)}</h1>
           <div class="mission-card__meta">${fmtD} · ${fmtT(start)}–${fmtT(end)} ${esc(m.timezone)}</div>
           <div class="mission-card__meta"><span class="mono">${m.lat.toFixed(4)}, ${m.lon.toFixed(4)}</span></div>
-          ${b.watershed ? `<div class="mission-card__meta">Watershed area <span class="mono">${b.watershed.area_sq_mi.toFixed(1)} mi²</span></div>` : ""}
+          ${b.watershed ? `<div class="mission-card__meta">Watershed area <span class="mono">${areaText(b.watershed, briefingUnits(b))}</span></div>` : ""}
         </div>
         <div class="mission-card__posture">
           <div class="eyebrow">Overall posture</div>
@@ -793,27 +868,77 @@ function overallSevClass(b) {
 
 /* ── 7.2 Tab bar ───────────────────────────────────────────────────── */
 function renderTabs() {
-  document.getElementById("tabs").innerHTML = TABS.map(
+  const buttons = TABS.map(
     (t) => `<button class="tab" role="tab" data-tab="${t.id}" aria-selected="${t.id === state.tab}">
       ${icon(t.id, "tab__icon")}<span>${t.label}</span></button>`
   ).join("");
+  // A single 2px underline that slides between tabs, instead of each tab owning
+  // its own border that jumps on switch. Width is one equal tab slot.
+  document.getElementById("tabs").innerHTML =
+    buttons + `<div class="tab-bar__indicator" aria-hidden="true" style="width:${100 / TABS.length}%"></div>`;
   document.querySelectorAll(".tab").forEach((el) =>
     el.addEventListener("click", () => selectTab(el.dataset.tab))
   );
+  positionTabIndicator(state.tab);
+}
+
+// Slide the tab underline to sit under the active tab. Called on every tab change.
+function positionTabIndicator(id) {
+  const ind = document.querySelector(".tab-bar__indicator");
+  if (!ind) return;
+  const idx = TABS.findIndex((t) => t.id === id);
+  if (idx < 0) return;
+  ind.style.left = `${(idx / TABS.length) * 100}%`;
 }
 
 function selectTab(id) {
+  // Direction of travel drives the slide: moving right through the tab order
+  // enters from the right, moving left enters from the left (reduced-motion off
+  // via CSS). Compared against the outgoing tab before we overwrite state.tab.
+  const prevIdx = TABS.findIndex((t) => t.id === state.tab);
+  const nextIdx = TABS.findIndex((t) => t.id === id);
+  const dir = nextIdx < prevIdx ? "back" : "fwd";
   state.tab = id;
   hideGlossaryPopover();
   document.querySelectorAll(".tab").forEach((el) =>
     el.setAttribute("aria-selected", String(el.dataset.tab === id))
   );
+  positionTabIndicator(id);
   document.querySelectorAll(".view").forEach((v) => (v.hidden = v.id !== `view-${id}`));
-  document.querySelector("main").scrollTo({ top: 0 });
+  playViewEnter(document.getElementById(`view-${id}`), dir);
+  const main = document.querySelector("main");
+  main.scrollTo({ top: 0 });
+  setHeaderScrolled(false); // fresh view starts at the top
   if (id === "map" && state.briefing) {
     requestAnimationFrame(() => initMainMap(state.briefing));
   }
   if (id === "forecast" && _fcSync) requestAnimationFrame(_fcSync);
+}
+
+// Re-trigger the view's enter animation (slide + staggered card fade). Removing
+// then forcing a reflow before re-adding restarts the CSS animation each switch.
+// The "about" view has no tab index (dir defaults forward) — still animates in.
+function playViewEnter(view, dir) {
+  if (!view) return;
+  view.classList.remove("is-entering", "enter-fwd", "enter-back");
+  void view.offsetWidth; // reflow so the animation replays
+  view.classList.add("is-entering", dir === "back" ? "enter-back" : "enter-fwd");
+  rearmLiveChips(view);
+}
+
+// Re-arm the hero posture-chip pulse when its view is shown again. Hiding a view
+// (display:none) cancels descendant CSS animations, and some engines (WebKit) do
+// not reliably restart an infinite animation when the view returns — so the pulse
+// would silently die on the first tab away-and-back. Clearing the animation and
+// forcing a reflow restarts it from the stylesheet rule, which keeps it running
+// for the life of the briefing. Reverting to '' (not a literal keyframe) means a
+// reduced-motion user, whose rule lives behind a no-preference guard, stays still.
+function rearmLiveChips(view) {
+  view.querySelectorAll(".posture-chip.is-live").forEach((el) => {
+    el.style.animation = "none";
+    void el.offsetWidth; // reflow
+    el.style.animation = "";
+  });
 }
 
 /* ── 7.4 Overview ──────────────────────────────────────────────────── */
@@ -903,6 +1028,7 @@ function renderOverview(b) {
 
 /* ── 7.6 Forecast ──────────────────────────────────────────────────── */
 function renderForecast(b) {
+  const sys = briefingUnits(b);
   const f = b.forecast_hourly;
   const hours = f.hours.map(fmtClock);
   const head = `<tr><th>Hour</th>${hours.map((h) => `<th>${esc(h)}</th>`).join("")}</tr>`;
@@ -923,16 +1049,16 @@ function renderForecast(b) {
       </div>
     </section>
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (°F)</h2>
+      <h2 class="section-title" style="margin-bottom:var(--space-2)">Temperature (${unitLabel(sys, "temp")})</h2>
       ${lineChart([b.temp_series.air, b.temp_series.feels], hours, ["var(--sev-high)", "var(--sev-extreme)"])}
       <div class="chart-caption">Air (orange) · Feels-like (red)</div>
     </section>
     <section class="card">
-      <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (mph)</h2>
+      <h2 class="section-title" style="margin-bottom:var(--space-2)">Wind &amp; gusts (${unitLabel(sys, "wind")})</h2>
       ${lineChart([b.wind_series.wind, b.wind_series.gust], hours, ["var(--color-brand)", "var(--color-text-muted)"])}
       <div class="chart-caption">Wind (cyan) · Gusts (grey)</div>
     </section>
-    ${renderRiskInputs(b.risk_inputs)}`;
+    ${renderRiskInputs(b.risk_inputs, sys)}`;
   flushChartInits();
   initForecastScroll();
   linkifyAcronyms(document.getElementById("view-forecast"));
@@ -940,7 +1066,7 @@ function renderForecast(b) {
 
 // Risk analysis inputs section — shows the scalar engine inputs (GEFS/REFS probs,
 // physical params, NWS alerts) so users can verify what drove each hazard tier (FR-20).
-function renderRiskInputs(ri) {
+function renderRiskInputs(ri, sys = "us") {
   if (!ri || !Object.keys(ri).length) return "";
 
   function riCard(label, iconName, value, unit, sub) {
@@ -963,7 +1089,8 @@ function renderRiskInputs(ri) {
   if (ri.cape_jkg != null)
     cards.push(riCard("CAPE", "lightning", ri.cape_jkg, " J/kg", "Instability"));
   if (ri.convective_rate_in_per_hr != null)
-    cards.push(riCard("Conv. rate", "flash_flood", ri.convective_rate_in_per_hr, " in/hr", "Peak rate"));
+    cards.push(riCard("Conv. rate", "flash_flood", ri.convective_rate_in_per_hr,
+      ` ${unitLabel(sys, "rate")}`, "Peak rate"));
   if (!cards.length) return "";
 
   const badges = [];
@@ -1197,39 +1324,6 @@ function barClass(cell) {
   return `timeline__bar bar-${cell.severity} ${w} ${conf}`;
 }
 
-// Render only the threshold-logic entry for the current posture.  If the logic
-// string has semicolon-separated "Tier = condition" entries (flash_flood style),
-// extract the matching one; for Minimal (not listed), frame it as "below the
-// lowest defined threshold".  Single-block logic (heat, lightning) is shown as-is.
-function thresholdLogicHtml(logic, currentLabel = "") {
-  const normalized = displayLogic(String(logic))
-    .replace(/\s*\((?:Appendix B|§)[^)]*\)/g, "")
-    .replace(/\s*\(FR-\d+[a-z]?\)/g, "");
-
-  const entries = normalized.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
-
-  if (entries.length <= 1) {
-    // Non-tiered copy (heat, lightning, cold_wet full block) — show as-is.
-    return `<ul class="logic-list"><li>${esc(normalized)}</li></ul>`;
-  }
-
-  if (currentLabel) {
-    // Try matching "Label = …" or "Label: …" at the start of any entry.
-    const pat = new RegExp(`^${currentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[=:]`, "i");
-    const hit = entries.find((e) => pat.test(e));
-    if (hit) return `<ul class="logic-list"><li>${esc(hit)}</li></ul>`;
-
-    // Label not found (Minimal tier absent from the logic) — frame as "below
-    // the lowest defined threshold", which is the last semicolon entry.
-    const lowestDefined = entries[entries.length - 1];
-    if (lowestDefined) {
-      return `<ul class="logic-list"><li>Below: ${esc(lowestDefined)}</li></ul>`;
-    }
-  }
-
-  return `<ul class="logic-list">${entries.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
-}
-
 // Per-hazard forecast-trend chart (Hazards tab detail card). Reads the FROZEN `series`
 // block on each hazard_detail (primary/secondary/bands), all index-aligned 1:1 to
 // forecast_hourly.hours. The line is the hazard's tier color; heat draws over its bands so
@@ -1304,18 +1398,21 @@ function renderHazards(b) {
 
   const details = b.hazard_detail
     .map(
+      // Confidence sits in the summary (stacked under the posture chip), so it is
+      // visible above the fold before the card is expanded — you can read posture
+      // *and* confidence at a glance without opening every hazard.
       (h) => `<details class="hazard-detail" data-hazard="${esc(h.hazard)}">
       <summary class="hazard-detail__summary">
         ${icon(h.hazard, "icon")}
         <span class="hazard-detail__name">${HAZARD_LABELS[h.hazard]}</span>
-        ${postureChip(displayTier(h.label), h.severity_class)}
+        <div class="hazard-detail__meta">
+          ${postureChip(displayTier(h.label), h.severity_class)}
+          ${confidenceTag(h.confidence)}
+        </div>
         ${icon("chevron", "hazard-detail__chev")}
       </summary>
       <div class="hazard-detail__body">
-        <div class="hazard-detail__confidence">${confidenceTag(h.confidence)}</div>
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
-        <h4>Threshold logic</h4>
-        ${thresholdLogicHtml(h.logic, h.label)}
         <h4>Forecast trend</h4>
         ${hazardChart(h, chartHours)}
         ${h.assumptions.map((a) => `<div class="assumption">${icon("alert", "")}<span>${esc(a)}</span></div>`).join("")}
@@ -1336,7 +1433,33 @@ function renderHazards(b) {
     <div style="display:flex;flex-direction:column;gap:var(--space-2)">${details}</div>
     <div class="disclaimer">Severity on the UpstreamWX ladder (${["Minimal", "Elevated", "High", "Extreme"].map(displayTier).join(" / ")}). Confidence shown as hatching and an explicit label; bar length distinguishes persistent hazards from time-windowed hazards (display only).</div>`;
   flushChartInits();
+  // Expanding a card should reveal it fully: scroll the view so the whole card is
+  // in frame. The <details> toggle event fires after layout reflows, so the card's
+  // expanded height is measured correctly.
+  document.querySelectorAll("#view-hazards .hazard-detail[data-hazard]").forEach((el) =>
+    el.addEventListener("toggle", () => { if (el.open) scrollCardIntoView(el); })
+  );
   linkifyAcronyms(document.getElementById("view-hazards"));
+}
+
+// Scroll the mission view minimally so `card` is fully visible. When the card is
+// taller than the viewport it top-aligns (the drivers/logic you just revealed);
+// otherwise it brings the clipped edge into frame. Respects reduced motion.
+function scrollCardIntoView(card) {
+  const main = document.querySelector("main");
+  if (!main) return;
+  const pad = 8;
+  const m = main.getBoundingClientRect();
+  const c = card.getBoundingClientRect();
+  let delta = 0;
+  if (c.height > m.height || c.top < m.top) {
+    delta = c.top - m.top - pad;            // top-align (tall card, or clipped above)
+  } else if (c.bottom > m.bottom) {
+    delta = c.bottom - m.bottom + pad;      // reveal the clipped bottom edge
+  }
+  if (!delta) return;
+  const reduced = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  main.scrollBy({ top: delta, behavior: reduced ? "auto" : "smooth" });
 }
 
 /* ── 7.11 Map ──────────────────────────────────────────────────────── */
@@ -1434,6 +1557,15 @@ function getDemSource() {
 function buildWxTopoStyle({ dark = true } = {}) {
   const P = dark ? WX_TOPO_DARK : WX_TOPO_LIGHT;
   const dem = getDemSource();
+  // Elevation follows the user's unit preference: feet (US contour convention) or metres.
+  // Read at style-build time; a units change applies to the base map on the next map load.
+  const metric = prefUnits() === "metric";
+  const elevMultiplier = metric ? 1 : 3.28084; // DEM is metres; scale to feet for US
+  const elevUnit = metric ? " m" : " ft";
+  const elevThresholds = metric
+    ? { 10: [500, 2500], 11: [250, 1250], 12: [100, 500], 13: [50, 250], 14: [20, 100], 15: [10, 50] }
+    : { 10: [1000, 5000], 11: [500, 2500], 12: [400, 2000], 13: [200, 1000], 14: [100, 500], 15: [40, 200] };
+  const peakElevKey = metric ? "ele" : "ele_ft"; // mountain_peak carries both
 
   const sources = {
     openmaptiles: { type: "vector", url: OFM_VECTOR_URL, attribution: OFM_ATTRIB },
@@ -1449,12 +1581,9 @@ function buildWxTopoStyle({ dark = true } = {}) {
     sources.contours = {
       type: "vector", maxzoom: 15,
       tiles: [dem.contourProtocolUrl({
-        multiplier: 3.28084,        // metres → feet (US contour convention)
+        multiplier: elevMultiplier, // metres → feet for US; metres as-is for metric
         overzoom: 1,
-        thresholds: {               // per-zoom [minor interval, index interval] in feet
-          10: [1000, 5000], 11: [500, 2500], 12: [400, 2000],
-          13: [200, 1000], 14: [100, 500], 15: [40, 200],
-        },
+        thresholds: elevThresholds, // per-zoom [minor interval, index interval] in display units
         elevationKey: "ele", levelKey: "level", contourLayer: "contours",
       })],
     };
@@ -1508,7 +1637,7 @@ function buildWxTopoStyle({ dark = true } = {}) {
       filter: ["==", ["get", "level"], 1], minzoom: 12,
       layout: {
         "symbol-placement": "line", "symbol-spacing": 320,
-        "text-field": ["concat", ["number-format", ["get", "ele"], { "max-fraction-digits": 0 }], " ft"],
+        "text-field": ["concat", ["number-format", ["get", "ele"], { "max-fraction-digits": 0 }], elevUnit],
         "text-font": ["Noto Sans Regular"], "text-size": 10, "text-rotation-alignment": "map",
       },
       paint: { "text-color": P.contourLabel, "text-halo-color": P.bg, "text-halo-width": 1.4 },
@@ -1524,8 +1653,8 @@ function buildWxTopoStyle({ dark = true } = {}) {
       "symbol-sort-key": ["coalesce", ["get", "rank"], 99],
       "text-field": ["concat",
         ["coalesce", ["get", "name:en"], ["get", "name"], ""],
-        ["case", ["has", "ele_ft"],
-          ["concat", "\n", ["number-format", ["get", "ele_ft"], { "max-fraction-digits": 0 }], " ft"],
+        ["case", ["has", peakElevKey],
+          ["concat", "\n", ["number-format", ["get", peakElevKey], { "max-fraction-digits": 0 }], elevUnit],
           ""],
       ],
       "text-font": ["Noto Sans Regular"],
@@ -1790,7 +1919,7 @@ function initMainMap(b) {
         .setHTML(`<div class="map-pop">
           <div class="map-pop__title">Approximate Watershed</div>
           <div class="map-pop__row">HUC-12 <span class="mono">${esc(wb.huc12.join(", "))}</span></div>
-          <div class="map-pop__row">Area <span class="mono">${wb.area_sq_mi.toFixed(1)} mi²</span></div>
+          <div class="map-pop__row">Area <span class="mono">${areaText(wb, briefingUnits(state.briefing))}</span></div>
         </div>`)
         .addTo(_mainMap);
     });
@@ -1806,8 +1935,8 @@ function initMainMap(b) {
     });
     _mainMap.on("click", "laoc-hit", (e) => {
       if (_moveMode) return;
-      const laocR = state.briefing?.laoc?.radius_mi;
-      const laocMi = Number.isFinite(laocR) ? ` (${laocR.toFixed(0)} mi)` : "";
+      const laocTxt = radiusText(state.briefing?.laoc, briefingUnits(state.briefing));
+      const laocMi = laocTxt ? ` (${laocTxt})` : "";
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
@@ -1820,8 +1949,8 @@ function initMainMap(b) {
     // (previously only the hatched excluded fill carried this tooltip, issue #111).
     _mainMap.on("click", "roc-hit", (e) => {
       if (_moveMode) return;
-      const rocR = state.briefing?.roc?.radius_mi;
-      const rocMi = Number.isFinite(rocR) ? ` (${rocR.toFixed(0)} mi)` : "";
+      const rocTxt = radiusText(state.briefing?.roc, briefingUnits(state.briefing));
+      const rocMi = rocTxt ? ` (${rocTxt})` : "";
       new maplibregl.Popup({ className: "map-popup" })
         .setLngLat(e.lngLat)
         .setHTML(`<div class="map-pop">
@@ -2152,6 +2281,9 @@ function renderAbout(b) {
     </div>`
   ).join("");
 
+  // Methodology thresholds are authored in US units; localize the condition/note prose to the
+  // briefing's display system so a metric user sees °C / mm consistent with the rest of the app.
+  const aboutSys = briefingUnits(b);
   const thresholds = ABOUT_THRESHOLDS.map(
     ([hz, title, basis, rows, note]) => `<div class="about-haz">
       <div class="about-haz__head">${icon(hz, "about-haz__icon")}<span class="about-haz__title">${esc(title)}</span></div>
@@ -2159,10 +2291,10 @@ function renderAbout(b) {
       <div class="about-matrix">${rows
         .map(([tier, cls, cond]) => `<div class="about-matrix__row">
           <span class="posture-chip ${cls} about-matrix__tier">${esc(displayTier(tier))}</span>
-          <span class="about-matrix__cond">${esc(cond)}</span>
+          <span class="about-matrix__cond">${esc(localizeUnitsText(cond, aboutSys))}</span>
         </div>`)
         .join("")}</div>
-      <p class="about-haz__note">${esc(note)}</p>
+      <p class="about-haz__note">${esc(localizeUnitsText(note, aboutSys))}</p>
     </div>`
   ).join("");
 
@@ -2572,7 +2704,16 @@ function freshenStaleSpec(spec) {
 // Reflect the slider index in the readout ("20 mi") and keep _mpSpec.radius_km in km.
 function updateRocReadout(idx) {
   const el = document.getElementById("mp-radius-value");
-  if (el) el.textContent = `${ROC_STOPS_MI[idx]} mi`;
+  if (el) el.textContent = sliderStopText(ROC_STOPS_MI[idx], prefUnits());
+}
+
+// Rewrite a slider's discrete tick labels for the chosen unit system (stops stay km-backed).
+function setSliderTicks(container, stopsMi, sys) {
+  if (!container) return;
+  const spans = container.querySelectorAll("span");
+  stopsMi.forEach((mi, i) => {
+    if (spans[i]) spans[i].textContent = sys === "metric" ? String(Math.round(mi * MI_TO_KM)) : String(mi);
+  });
 }
 
 // Live preview of the Radius of Concern on the planner map: a fine dashed orange ring
@@ -2788,6 +2929,7 @@ function openMissionPlanner(spec) {
   const rocIdx = nearestRocIndex(rocMiFromSpec(_mpSpec));
   _mpSpec.radius_km = ROC_STOPS_MI[rocIdx] * MI_TO_KM;
   document.getElementById("mp-radius").value = String(rocIdx);
+  setSliderTicks(document.getElementById("mp-radius-ticks"), ROC_STOPS_MI, prefUnits());
   updateRocReadout(rocIdx);
   document.getElementById("mp-search-input").value = "";
   setPlannerStatus("");
@@ -2974,9 +3116,23 @@ function initPlannerControls() {
 }
 
 /* ── Settings (app-wide user prefs) ────────────────────────────────── */
+// The units toggle is a two-button radiogroup; track the pending choice while the sheet
+// is open (committed on Save, like the sliders). Seed from the current pref on open.
+let _settingsUnits = "us";
+function reflectUnitsToggle(sys) {
+  _settingsUnits = sys === "metric" ? "metric" : "us";
+  const us = document.getElementById("settings-units-us");
+  const metric = document.getElementById("settings-units-metric");
+  if (us) us.setAttribute("aria-checked", String(_settingsUnits === "us"));
+  if (metric) metric.setAttribute("aria-checked", String(_settingsUnits === "metric"));
+  // The LAoC slider readout + ticks are distances, so they follow the pending choice live.
+  setSliderTicks(document.getElementById("settings-laoc-ticks"), LAOC_STOPS_MI, _settingsUnits);
+  const laocSlider = document.getElementById("settings-laoc");
+  if (laocSlider) updateLaocReadout(parseInt(laocSlider.value, 10) || 0);
+}
 function updateLaocReadout(idx) {
   const el = document.getElementById("settings-laoc-value");
-  if (el) el.textContent = `${LAOC_STOPS_MI[idx]} mi`;
+  if (el) el.textContent = sliderStopText(LAOC_STOPS_MI[idx], _settingsUnits);
 }
 function updatePhaseReadout(id, idx) {
   const el = document.getElementById(id);
@@ -2987,12 +3143,14 @@ function updatePhaseReadout(id, idx) {
 function openSettings() {
   hideGlossaryPopover();
   const prefs = loadPrefs();
+  reflectUnitsToggle(prefs.units);
   const laocIdx = nearestLaocIndex(laocMiFromPrefs(prefs));
   const approachIdx = nearestPhaseIndex(prefs.approach_hrs ?? PHASE_DEFAULT_HR);
   const egressIdx = nearestPhaseIndex(prefs.egress_hrs ?? PHASE_DEFAULT_HR);
 
   const laocSlider = document.getElementById("settings-laoc");
   if (laocSlider) laocSlider.value = String(laocIdx);
+  setSliderTicks(document.getElementById("settings-laoc-ticks"), LAOC_STOPS_MI, _settingsUnits);
   updateLaocReadout(laocIdx);
 
   const approachSlider = document.getElementById("settings-approach");
@@ -3024,6 +3182,11 @@ function initSettingsControls() {
     if (e.target === e.currentTarget) closeSettings();
   });
 
+  document.getElementById("settings-units-us")
+    ?.addEventListener("click", () => reflectUnitsToggle("us"));
+  document.getElementById("settings-units-metric")
+    ?.addEventListener("click", () => reflectUnitsToggle("metric"));
+
   const laocSlider = document.getElementById("settings-laoc");
   laocSlider?.addEventListener("input", () => {
     updateLaocReadout(parseInt(laocSlider.value, 10) || 0);
@@ -3044,6 +3207,7 @@ function initSettingsControls() {
     const approachIdx = parseInt(approachSlider?.value ?? "1", 10) || 0;
     const egressIdx = parseInt(egressSlider?.value ?? "1", 10) || 0;
     const prefs = loadPrefs();
+    prefs.units = _settingsUnits;
     prefs.laoc_radius_km = LAOC_STOPS_MI[laocIdx] * MI_TO_KM;
     prefs.approach_hrs = PHASE_STOPS_HR[approachIdx];
     prefs.egress_hrs = PHASE_STOPS_HR[egressIdx];
@@ -3135,6 +3299,7 @@ async function main() {
     if (cfg?.heat_labels) Object.assign(TIER_LABELS, cfg.heat_labels);
   } catch (_) { /* keep identity defaults */ }
   renderTabs();
+  initHeaderScrollShadow();
   renderLoadingState();
   initGlossaryInteractions();
   initPlannerControls();

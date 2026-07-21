@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # UpstreamWX — build + activate a release on the host (run after bootstrap.sh).
 #
-#   sudo deploy/deploy.sh [git-ref]        # ref defaults to DEPLOY_BRANCH
+#   sudo DEPLOY_CONFIG=<config> deploy/deploy.sh [git-ref]   # ref defaults to DEPLOY_BRANCH
+#
+# DEPLOY_CONFIG is REQUIRED (issue #146) — there is no silent default environment; prefer
+# this box's installed wrapper (`uwx-ctl deploy [ref]`), which bakes the config in.
 #
 # Idempotent and safe to re-run. SA-06 atomic-release model: it fetches the ref into a
 # root-owned git mirror, verifies a signed tag if required (SA-07), builds a fresh
@@ -17,6 +20,10 @@
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/_lib.sh"
 load_config
 require_root
+# Hard blocks (#146): refuse a mis-selected environment before building anything — a deploy
+# run against the wrong config must not touch a coexisting install or a cross-owned data dir.
+check_install_conflicts
+check_data_dir_owner
 
 REF="${1:-$DEPLOY_BRANCH}"
 # -H sets HOME to the service user's home ($DEPLOY_APP_DIR); without it sudo keeps the

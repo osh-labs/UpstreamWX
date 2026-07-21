@@ -14,9 +14,11 @@
     "timezone": "EDT",
     "tz_name": "America/New_York"
   },
+  "units": "us",
   "watershed": {
     "huc12": [],
     "area_sq_mi": 2.0,
+    "area_km2": 5.2,
     "geometry": {
       "type": "Polygon",
       "coordinates": [

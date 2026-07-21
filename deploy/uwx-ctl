@@ -16,6 +16,8 @@
 #   uwx-ctl releases         list on-disk releases (marks the active one)
 #   uwx-ctl version          show the active release
 #   uwx-ctl restart          restart the service
+#   uwx-ctl uninstall        REMOVE this environment from the host (typed confirmation;
+#                            --keep-data preserves the data dir, --yes skips the prompt)
 #
 # Commands that change state use sudo automatically (or run directly if already root).
 set -euo pipefail
@@ -26,6 +28,11 @@ APP_DIR="__APP_DIR__"
 SERVICE="__SERVICE__"
 BIND_HOST="__BIND_HOST__"
 BIND_PORT="__BIND_PORT__"
+# Baked for `uninstall` (env-scoped teardown must not depend on a live release tree):
+DATA_DIR="__DATA_DIR__"
+ENV_DIR="__ENV_DIR__"
+SVC_USER="__USER__"
+SVC_GROUP="__GROUP__"
 
 SCRIPTS="$APP_DIR/current/deploy"
 HEALTH_URL="http://${BIND_HOST}:${BIND_PORT}/v1/health"
@@ -35,7 +42,14 @@ _run_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
 _deploy_env() {
     # Run one of the deploy scripts with this env's config selected.
     local script="$1"; shift
-    [ -x "$SCRIPTS/$script" ] || { echo "error: $SCRIPTS/$script not found — is a release active?" >&2; exit 1; }
+    # The SA-06 release tree is chmod o= (root:group, no access for "other"), so the invoking
+    # user usually cannot even traverse into current/deploy/. This existence check must run at
+    # the SAME privilege as the exec below (root) — as the unprivileged user it always failed
+    # with "not found — is a release active?" even though root can run the script fine.
+    if ! _run_root test -x "$SCRIPTS/$script"; then
+        echo "error: $SCRIPTS/$script not found or not executable — is a release active?" >&2
+        exit 1
+    fi
     _run_root env DEPLOY_CONFIG="$CTL_CONFIG" "$SCRIPTS/$script" "$@"
 }
 
@@ -52,6 +66,9 @@ uwx-ctl — ops wrapper for this UpstreamWX box (service: $SERVICE)
   uwx-ctl releases         list on-disk releases (marks the active one)
   uwx-ctl version          show the active release
   uwx-ctl restart          restart the service
+  uwx-ctl uninstall        REMOVE this environment (service, app/data/env dirs, nginx
+                           sites, account, this wrapper). Typed confirmation required;
+                           --keep-data preserves $DATA_DIR; --yes skips the prompt.
 
 State-changing commands use sudo automatically. Config: $CTL_CONFIG
 EOF
@@ -104,6 +121,73 @@ case "$cmd" in
             done
             die "rolled back but service did not become healthy — check logs"
         ' ;;
+    uninstall)
+        # Env-scoped clean removal (the scripted form of the 2026-07-20 incident teardown,
+        # docs/staging-rebuild-runbook-2026-07-20.md §1): removes ONLY this wrapper's baked
+        # environment — service unit (+ drop-ins), nginx sites, app/data/env dirs, service
+        # account, and finally the wrapper itself. A coexisting second environment (its own
+        # wrapper name, #146) is untouched; after uninstall the host passes bootstrap's
+        # conflict scan for a clean reinstall. Self-contained on purpose: it must work on a
+        # half-broken box with no active release tree to run scripts from.
+        keep_data=0 assume_yes=0
+        for a in "$@"; do
+            case "$a" in
+                --keep-data) keep_data=1 ;;
+                --yes|-y)    assume_yes=1 ;;
+                *) echo "unknown uninstall option: $a (valid: --keep-data, --yes)" >&2; exit 2 ;;
+            esac
+        done
+        [ "$(id -u)" -eq 0 ] || exec sudo "$0" uninstall "$@"
+        # Refuse obviously-unsafe baked paths before any rm -rf (an unrendered/corrupt
+        # wrapper must never be able to aim a recursive delete at / or $HOME).
+        for p in "$APP_DIR" "$DATA_DIR" "$ENV_DIR"; do
+            case "$p" in
+                /opt/?*|/srv/?*|/var/lib/?*|/etc/?*) ;;
+                *) echo "refusing uninstall: baked path '$p' is not under /opt, /srv, /var/lib, or /etc" >&2; exit 1 ;;
+            esac
+        done
+        echo "This will PERMANENTLY remove the '$SERVICE' environment from this host:"
+        echo "  service   $SERVICE (unit + drop-ins)"
+        echo "  app dir   $APP_DIR (releases, mirror, venvs)"
+        if [ "$keep_data" -eq 1 ]; then
+            echo "  data dir  $DATA_DIR  [KEPT: --keep-data]"
+        else
+            echo "  data dir  $DATA_DIR  (ensemble caches re-warm on the next deploy)"
+        fi
+        echo "  env dir   $ENV_DIR (deploy config + env file with its secrets)"
+        echo "  nginx     ${SERVICE}.conf, ${SERVICE}-default.conf, ${SERVICE}-landing.conf"
+        echo "  account   $SVC_USER:$SVC_GROUP"
+        echo "  wrapper   $0"
+        if [ "$assume_yes" -ne 1 ]; then
+            printf "Type the service name ('%s') to confirm: " "$SERVICE"
+            read -r _confirm
+            [ "$_confirm" = "$SERVICE" ] || { echo "aborted — no changes made"; exit 1; }
+        fi
+        systemctl disable --now "$SERVICE" 2>/dev/null || true
+        rm -rf "/etc/systemd/system/${SERVICE}.service" "/etc/systemd/system/${SERVICE}.service.d"
+        # Every step is tolerant (|| true): a teardown must plow through a half-broken box.
+        systemctl daemon-reload 2>/dev/null || true
+        systemctl reset-failed "$SERVICE" 2>/dev/null || true
+        for n in "$SERVICE" "${SERVICE}-default" "${SERVICE}-landing"; do
+            rm -f "/etc/nginx/sites-enabled/${n}.conf" \
+                  "/etc/nginx/sites-available/${n}.conf" \
+                  "/etc/nginx/conf.d/${n}.conf"
+        done
+        if nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || true; fi
+        rm -rf "$APP_DIR"
+        [ "$keep_data" -eq 1 ] || rm -rf "$DATA_DIR"
+        rm -rf "$ENV_DIR"
+        userdel "$SVC_USER" 2>/dev/null || true
+        groupdel "$SVC_GROUP" 2>/dev/null || true
+        echo "'$SERVICE' removed. Remaining UpstreamWX artifacts on this host (other envs, if any):"
+        systemctl list-units 'upstreamwx*' --all --no-legend 2>/dev/null || true
+        ls -d /opt/upstreamwx* /var/lib/upstreamwx* /etc/upstreamwx* 2>/dev/null || echo "  (none)"
+        echo "note: the shared journald namespace config (/etc/systemd/journald@upstreamwx.conf)"
+        echo "      is left in place — it is harmless and may serve another environment."
+        echo "Reinstall: clone the repo and run:  sudo DEPLOY_CONFIG=<config> deploy/bootstrap.sh"
+        # Deleting the running script is safe on Linux (the open fd keeps the inode); do it last.
+        rm -f "$0"
+        ;;
     help|-h|"") _usage ;;
     *) echo "unknown command: $cmd" >&2; echo >&2; _usage >&2; exit 2 ;;
 esac

@@ -22,6 +22,7 @@ import json as _json
 import logging
 import math
 import multiprocessing
+import os
 import re
 import threading
 import time
@@ -524,6 +525,11 @@ def health() -> dict:
     configured to do" is a one-curl check instead of sourcing the env file. ``decode_pool`` is
     the *actual* installed state (reflects the opt-in setting and any broken-pool fallback), not
     just the configured flag.
+
+    ``data_dir_ok`` says whether the runtime cache root is actually usable by this process
+    (issue #147): a misdirected/unowned data dir now degrades briefings instead of 500ing
+    them, so monitoring — not users — must be what catches the misconfig. Boolean only (no
+    path) on this unauthenticated probe (SA-12).
     """
     settings = get_settings()
     # Last scheduled-refresh pass counts (SA-03 rec 7) — counts only, no mission content, so this
@@ -532,6 +538,7 @@ def health() -> dict:
     stats = service.last_refresh_stats
     return {
         "status": "ok",
+        "data_dir_ok": _data_dir_ok(settings),
         "release": _release(),
         "cycle": cycle_key(),
         "next_cycle": next_cycle().isoformat(),
@@ -668,7 +675,7 @@ async def frame_stream(
     if not api_key:
         return Response(status_code=204)
 
-    key = mission_cache_key(spec.to_mission(), spec.to_inputs())
+    key = mission_cache_key(spec.to_mission(), spec.to_inputs(), units=spec.units)
     result = service.get_result(key)
     if result is None:
         raise HTTPException(
@@ -819,6 +826,21 @@ def warm_watershed(
             headers={"Retry-After": "30"},
         ) from None
     return {"status": "submitted" if submitted else "noop"}
+
+
+def _data_dir_ok(settings) -> bool:
+    """Whether the runtime data dir exists (or can be created) and is writable (issue #147).
+
+    Creating it here is idempotent and matches the lazy mkdir the cache writers already do;
+    on a misconfigured host (e.g. the dir belongs to another install) the attempt raises and
+    the probe reports ``False`` — the signal monitoring needs, since briefings themselves now
+    degrade rather than 500 on an unusable cache root (NFR-6).
+    """
+    try:
+        settings.data_dir.mkdir(parents=True, exist_ok=True)
+        return os.access(settings.data_dir, os.W_OK | os.X_OK)
+    except OSError:
+        return False
 
 
 def _release() -> str:

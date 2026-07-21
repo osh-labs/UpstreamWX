@@ -35,6 +35,10 @@ class GeneratedBriefing:
     framed: bool
     bundle: IngestBundle | None = None
     warnings: list[str] = field(default_factory=list)
+    # Display unit system this briefing was rendered in ("us" | "metric"). Display-only —
+    # it selects units for the Markdown/structured output; the engine result is unaffected
+    # (FR-13, NFR-4). The structured serializer echoes it so the PWA labels track the data.
+    units: str = "us"
 
     @property
     def sources_ok(self) -> dict[str, bool]:
@@ -53,6 +57,7 @@ def generate_briefing(
     frame: bool | None = None,
     generated_at: datetime | None = None,
     cycle=None,
+    units: str = "us",
 ) -> GeneratedBriefing:
     """Generate a briefing for ``mission``.
 
@@ -60,6 +65,8 @@ def generate_briefing(
     ``frame`` — add the Haiku narrative; ``None`` means "frame iff an API key is set"
     (FR-21). ``generated_at`` defaults to now (the only time-varying render input).
     ``cycle`` — optional SREF cycle override forwarded to the ingest orchestrator.
+    ``units`` — display system for the rendered artifacts ("us" | "metric"); the engine
+    result is identical either way (FR-13, NFR-4).
     """
     generated_at = generated_at or datetime.now(UTC)
     warnings: list[str] = []
@@ -84,7 +91,9 @@ def generate_briefing(
         phase_inputs = to_phase_hazard_inputs(bundle, mission, inputs)
 
     result = assess(mission, inputs, phase_inputs=phase_inputs)
-    structured = render_md(result, upstream=upstream, bundle=bundle, generated_at=generated_at)
+    structured = render_md(
+        result, upstream=upstream, bundle=bundle, generated_at=generated_at, units=units
+    )
 
     want_frame = frame if frame is not None else bool(get_settings().anthropic_api_key)
     markdown = frame_briefing(result, structured) if want_frame else structured
@@ -96,4 +105,5 @@ def generate_briefing(
         framed=want_frame,
         bundle=bundle,
         warnings=warnings,
+        units=units,
     )

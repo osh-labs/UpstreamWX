@@ -93,6 +93,26 @@ def test_render_is_deterministic(case):
     assert render_md(**kwargs) == render_md(**kwargs)
 
 
+def test_render_default_units_is_us_byte_identical() -> None:
+    """The default and explicit-US renders match — the units param is opt-in (NFR-4)."""
+    kwargs, _ = canyon_href_case()
+    assert render_md(**kwargs) == render_md(**kwargs, units="us")
+
+
+def test_render_metric_localizes_source_data_and_drivers() -> None:
+    """Metric converts the numeric source-data drill-down and the engine-authored driver prose."""
+    kwargs, _ = canyon_href_case()
+    metric = render_md(**kwargs, units="metric")
+    # Numeric source-data drill-down (converted at the render site).
+    assert "- Heat index: 35 °C" in metric  # 95 °F
+    assert "- Apparent temp: 33 °C" in metric  # 92 °F
+    assert "- Wind: 13 km/h" in metric  # 8 mph
+    assert "- CAPE: 1200 J/kg" in metric  # dimensionless, unchanged
+    # Engine-authored driver prose (converted by the text localizer), not native units.
+    assert "95 °F" not in metric and "92 °F" not in metric
+    assert "Heat index 35 °C" in metric
+
+
 @pytest.mark.parametrize("case", CASES, ids=lambda c: c.__name__)
 def test_render_carries_disclaimer_and_sources(case):
     kwargs, _ = case()

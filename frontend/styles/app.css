@@ -72,6 +72,8 @@ main {
 
 /* ── 7.1 App header ────────────────────────────────────────────────── */
 .app-header {
+  position: relative;
+  z-index: 2; /* sit above the scrolling view so the drop-shadow reads */
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -80,6 +82,11 @@ main {
   background: var(--color-surface);
   border-bottom: 1px solid var(--color-border);
 }
+/* Lifts once the view body scrolls (JS toggles .is-scrolled). */
+@media (prefers-reduced-motion: no-preference) {
+  .app-header { transition: box-shadow var(--dur) var(--ease); }
+}
+.app-header.is-scrolled { box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35); }
 
 .brand {
   display: flex;
@@ -157,9 +164,13 @@ main {
   background: var(--color-surface-2);
 }
 .header-reload__icon { width: 18px; height: 18px; }
+/* Spin the icon for a beat when tapped, before the page reload (JS adds the
+   class; the reduced-motion path reloads immediately without spinning). */
+.header-reload.is-spinning .header-reload__icon { animation: wx-spin 0.7s linear; }
 
 /* ── 7.2 Tab bar ───────────────────────────────────────────────────── */
 .tab-bar {
+  position: relative; /* anchors the sliding underline indicator */
   flex-shrink: 0;
   display: flex;
   background: var(--color-surface);
@@ -176,12 +187,10 @@ main {
   padding: var(--space-2) var(--space-1);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
   color: var(--color-text-secondary);
   font-size: var(--text-caption);
   letter-spacing: 0.02em;
-  transition: color var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
+  transition: color var(--dur-fast) var(--ease);
 }
 
 .tab__icon {
@@ -191,8 +200,20 @@ main {
 
 .tab[aria-selected="true"] {
   color: var(--color-brand);
-  border-bottom-color: var(--color-brand);
-  background: var(--color-brand-dim);
+}
+
+/* Sliding 2px underline under the active tab (position set inline by JS). The
+   left transition is gated to no-preference so reduced-motion snaps it. */
+.tab-bar__indicator {
+  position: absolute;
+  bottom: -1px; /* overlap the 1px bottom border */
+  left: 0;
+  height: 2px;
+  background: var(--color-brand);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .tab-bar__indicator { transition: left var(--dur) var(--ease); }
 }
 
 /* ── View body ─────────────────────────────────────────────────────── */
@@ -206,6 +227,53 @@ main {
 
 .view[hidden] {
   display: none;
+}
+
+/* ── Motion primitives ─────────────────────────────────────────────────
+   Subtle, fixed baseline (STYLE_GUIDE §5): tab-switch view enter, staggered
+   card fade-in, a slow severity-chip pulse, and the reload spin. Every *applied*
+   animation lives inside a prefers-reduced-motion: no-preference guard, so a
+   reduced-motion user gets the plain, instant UI. Transition-length motion is
+   held to the guide's 120–200ms; the pulse is a slow ambient accent, not a
+   transition. */
+@keyframes wx-view-in-right {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes wx-view-in-left {
+  from { opacity: 0; transform: translateX(-14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes wx-card-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes wx-chip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.62; }
+}
+@keyframes wx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .view.is-entering.enter-fwd { animation: wx-view-in-right var(--dur) var(--ease) both; }
+  .view.is-entering.enter-back { animation: wx-view-in-left var(--dur) var(--ease) both; }
+  /* Stagger the first several direct children in as the view enters. */
+  .view.is-entering > * { animation: wx-card-in var(--dur) var(--ease) both; }
+  .view.is-entering > *:nth-child(1) { animation-delay: 0ms; }
+  .view.is-entering > *:nth-child(2) { animation-delay: 40ms; }
+  .view.is-entering > *:nth-child(3) { animation-delay: 80ms; }
+  .view.is-entering > *:nth-child(4) { animation-delay: 120ms; }
+  .view.is-entering > *:nth-child(5) { animation-delay: 160ms; }
+  .view.is-entering > *:nth-child(n + 6) { animation-delay: 200ms; }
+  /* iOS Safari collapses a <details> to zero height when a transform/animation is
+     applied directly to it, which made the Overview's Risk Discussion summary card
+     (the only top-level <details>) vanish on WebKit. Skip the entrance stagger for
+     <details> — it still appears with the view's own transition, exactly like the
+     Hazards-tab detail cards (which are nested, never directly animated). */
+  .view.is-entering > details { animation: none; }
 }
 
 .section-title {
@@ -310,6 +378,12 @@ main {
 .sev-high { background: var(--sev-high-wash); color: var(--sev-high-text); }
 .sev-extreme { background: var(--sev-extreme-wash); color: var(--sev-extreme-text); }
 
+/* Slow ambient pulse on the overall/hero chip for the top two tiers (JS adds
+   .is-live only there). Draws the eye without blinking; off under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .posture-chip.is-live { animation: wx-chip-pulse 2.4s var(--ease) infinite; }
+}
+
 /* heat category variants */
 .heat-caution { background: rgba(227, 192, 26, 0.16); color: var(--heat-caution); }
 .heat-extreme_caution { background: rgba(240, 160, 32, 0.16); color: var(--heat-ext-caution); }
@@ -317,32 +391,51 @@ main {
 .heat-extreme_danger { background: rgba(218, 54, 51, 0.18); color: var(--heat-ext-danger); }
 
 /* ── 7.5 Confidence indicator (signal-bar style) ───────────────────── */
-/* Three SVG bars whose tops share a single computed diagonal, so junctions are
-   seamless. 1 bar filled = low, 2 = moderate, 3 = high (FR-36).
-   Width is pill − corner-rounding diameter (26 px) so bars align with the pill's
-   flat inner area. */
+/* Three equal-height bars + a level label. Filled count = confidence: 1 = low,
+   2 = moderate, 3 = high (FR-36). Fill is neutral (never a severity hue) so
+   confidence is read from shape, not color. Default is a compact inline row
+   (label left, bars right) centered under the pill; the hero (`is-lg`) variant
+   stacks larger bars above the label. */
 .confidence {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
   width: var(--pill-w);
 }
-.confidence.is-lg { width: var(--pill-w-lg); }
 
-/* SVG element sized to the pill's flat inner area, centred beneath the pill. */
 .confidence__bars {
-  display: block;
-  width: calc(100% - 26px);
-  height: 18px;
-  margin: 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
 }
+
+.confidence__bar {
+  width: 6px;
+  height: 12px;
+  border-radius: 2px;
+}
+.confidence__bar--on { background: var(--color-text-secondary); }
+.confidence__bar--off { background: var(--color-border-strong); }
 
 .confidence__label {
   font-size: var(--text-caption);
   color: var(--color-text-muted);
-  text-align: center;
   white-space: nowrap;
 }
+
+/* Hero variant: larger bars stacked above the label, centred under the overall
+   posture pill. column-reverse puts the bars (2nd child) on top, label below. */
+.confidence.is-lg {
+  flex-direction: column-reverse;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  width: var(--pill-w-lg);
+}
+.confidence.is-lg .confidence__bars { gap: 6px; }
+.confidence.is-lg .confidence__bar { width: 18px; height: 14px; border-radius: 3px; }
 
 /* ── 7.6 Metric card ───────────────────────────────────────────────── */
 .metric-grid {
@@ -598,20 +691,21 @@ main {
 .hazard-detail__summary::-webkit-details-marker { display: none; }
 .hazard-detail__summary svg.icon { width: 22px; height: 22px; color: var(--color-text-secondary); }
 .hazard-detail__name { flex: 1; font-weight: 600; }
+/* Posture chip + confidence stacked in the collapsed summary, so both read at a
+   glance above the fold (the two pills are equal width, so they line up). */
+.hazard-detail__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+}
 .hazard-detail__chev { width: 18px; height: 18px; color: var(--color-text-muted); transition: transform var(--dur-fast) var(--ease); }
 details[open] .hazard-detail__chev { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { .hazard-detail__chev { transition: none; } }
 
 .hazard-detail__body {
   padding: 0 var(--space-3) var(--space-3);
   border-top: 1px solid var(--color-border);
-}
-/* Line the confidence bar up under the summary's posture pill: right-aligned,
-   clearing the chevron (18px) + its gap so the two equal-width pills stack. */
-.hazard-detail__confidence {
-  display: flex;
-  justify-content: flex-end;
-  padding-right: calc(18px + var(--space-3));
-  margin-top: var(--space-3);
 }
 .hazard-detail__body h4 {
   font-size: var(--text-caption);
@@ -622,8 +716,6 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .hazard-detail__body ul { margin: 0; padding-left: var(--space-4); }
 .hazard-detail__body li { font-size: var(--text-label); color: var(--color-text-secondary); margin: 2px 0; }
-.hazard-detail__body .logic-list { margin-top: var(--space-2); }
-.hazard-detail__body .logic-list li { margin: var(--space-1) 0; }
 
 .assumption {
   display: flex;
@@ -1352,6 +1444,35 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
    its map ring (distinct from the orange RoC/phase sliders). Yellow is scoped by ID so the
    approach/egress sliders remain orange. */
 .settings-body { padding-bottom: var(--space-2); }
+
+/* US/metric segmented toggle — two equal-width buttons; the active one carries the brand
+   fill. Styled off aria-checked so the a11y state and the visual state can never drift. */
+.unit-toggle {
+  display: flex;
+  gap: 0;
+  margin-top: var(--space-2);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.unit-toggle__btn {
+  flex: 1 1 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface-2);
+  color: var(--color-text-muted);
+  border: none;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--motion-fast, 120ms) ease, color var(--motion-fast, 120ms) ease;
+}
+.unit-toggle__btn + .unit-toggle__btn { border-left: 1px solid var(--color-border-strong); }
+.unit-toggle__btn[aria-checked="true"] {
+  background: var(--color-brand);
+  color: var(--color-brand-ink, #06131f);
+}
+.unit-toggle__btn:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+
 #settings-laoc-value { color: #facc15; }
 #settings-laoc::-webkit-slider-thumb { background: #facc15; }
 #settings-laoc::-moz-range-thumb { background: #facc15; }
