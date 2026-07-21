@@ -18,6 +18,8 @@ from functools import cache
 from shapely.geometry import Point
 from shapely.geometry.base import BaseGeometry
 
+from ._hyriver import configure_hyriver_cache
+
 # WBD layer names exposed by pynhd.WaterData, ordered HUC-12 first then the
 # HUC-10 fallback. (level, layer, id-field-candidates)
 _WBD_LAYERS = (
@@ -84,6 +86,9 @@ def resolve_huc12(lat: float, lon: float) -> HucResult:
     Raises:
         ValueError: if neither a HUC-12 nor a HUC-10 can be resolved.
     """
+    # Pin HyRiver's HTTP cache under data_dir before any async-retriever call — its default
+    # (./cache relative to CWD) is unwritable under the read-only release tree (see _hyriver).
+    configure_hyriver_cache()
     point = Point(lon, lat)
     # A tiny buffer makes the geometry query robust to the point landing on a
     # shared HU boundary; we then pick the polygon that actually contains it.
