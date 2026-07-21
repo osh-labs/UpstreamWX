@@ -295,14 +295,15 @@ the noted class. Visual contract first; PRD reference in parentheses.
 - Heat variant uses the heat ramp + the NWS category label.
 
 ### 7.5 Confidence bar (`.confidence`) — FR-36
-- Three discrete signal bars of ascending height (short → tall), the same width
-  as the posture pill it sits under, with the small gray label
-  `High|Moderate|Low confidence` centered below.
-- The filled *count* reads the engine's level like a signal-strength meter: Low
-  = 1 filled, Moderate = 2, High = all 3. Fill is **neutral**
-  (`--color-text-secondary` filled, `--color-surface-3` empty) — never a
-  severity hue, so confidence is read from **shape, not color** (FR-36) and can
-  never be mistaken for a hazard tier.
+- Three **equal-height** bars (not stair-stepped) plus the small gray label
+  `High|Moderate|Low confidence`. Default is a compact inline row — label left,
+  bars right — right-aligned under the posture pill. The **hero** variant
+  (`.is-lg`, the overall-posture card only) uses larger bars stacked above the
+  label, centered under the pill.
+- The filled *count* reads the engine's level: Low = 1 filled, Moderate = 2,
+  High = all 3. Fill is **neutral** (`--color-text-secondary` filled,
+  `--color-border-strong` empty) — never a severity hue, so confidence is read
+  from **shape, not color** (FR-36) and can never be mistaken for a hazard tier.
 - Non-interactive — set by the engine.
 
 ### 7.6 Metric card (`.metric-card`) — Appendix D §18.2
