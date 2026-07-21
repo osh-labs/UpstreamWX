@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import networkx as nx
 from shapely.geometry.base import BaseGeometry
 
+from ._hyriver import configure_hyriver_cache
 from .huc import HucResult, _field, _water_data
 
 _EQUAL_AREA_CRS = 5070  # NAD83 / CONUS Albers
@@ -344,6 +345,8 @@ def trace_upstream(origin: HucResult) -> UpstreamTrace:
             fallback also failed.
         ValueError: if neither method produces an upstream domain.
     """
+    # Pin HyRiver's HTTP cache under data_dir before any async-retriever call (see _hyriver).
+    configure_hyriver_cache()
     graph_error: UpstreamGraphError | None = None
     try:
         result = _trace_tohuc(origin)
