@@ -329,21 +329,6 @@ function displayLeadLabel(s) {
   return s.replace(/— (.+)$/, (_, t) => `— ${displayTier(t)}`);
 }
 
-// Single-pass replacement of all configured label strings in backend-authored text
-// (threshold logic, driver copy). Sorts longest key first so "Extreme Caution"
-// matches before "Extreme", avoiding double-substitution.
-function displayLogic(s) {
-  const entries = Object.entries(TIER_LABELS)
-    .filter(([k, v]) => k !== v)
-    .sort(([a], [b]) => b.length - a.length);
-  if (!entries.length) return s;
-  const re = new RegExp(
-    `\\b(${entries.map(([k]) => k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
-    "g"
-  );
-  return s.replace(re, (m) => TIER_LABELS[m] ?? m);
-}
-
 /* ── Acronym glossary (Resources card + tap-to-define) ─────────────────
  * Definitions for the acronyms that show up in the BLUF/SITREP and hazard
  * cards. Surfaced two ways: a glossary card in Resources and inline
@@ -1319,39 +1304,6 @@ function barClass(cell) {
   return `timeline__bar bar-${cell.severity} ${w} ${conf}`;
 }
 
-// Render only the threshold-logic entry for the current posture.  If the logic
-// string has semicolon-separated "Tier = condition" entries (flash_flood style),
-// extract the matching one; for Minimal (not listed), frame it as "below the
-// lowest defined threshold".  Single-block logic (heat, lightning) is shown as-is.
-function thresholdLogicHtml(logic, currentLabel = "") {
-  const normalized = displayLogic(String(logic))
-    .replace(/\s*\((?:Appendix B|§)[^)]*\)/g, "")
-    .replace(/\s*\(FR-\d+[a-z]?\)/g, "");
-
-  const entries = normalized.split(/;\s*/).map((s) => s.trim()).filter(Boolean);
-
-  if (entries.length <= 1) {
-    // Non-tiered copy (heat, lightning, cold_wet full block) — show as-is.
-    return `<ul class="logic-list"><li>${esc(normalized)}</li></ul>`;
-  }
-
-  if (currentLabel) {
-    // Try matching "Label = …" or "Label: …" at the start of any entry.
-    const pat = new RegExp(`^${currentLabel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*[=:]`, "i");
-    const hit = entries.find((e) => pat.test(e));
-    if (hit) return `<ul class="logic-list"><li>${esc(hit)}</li></ul>`;
-
-    // Label not found (Minimal tier absent from the logic) — frame as "below
-    // the lowest defined threshold", which is the last semicolon entry.
-    const lowestDefined = entries[entries.length - 1];
-    if (lowestDefined) {
-      return `<ul class="logic-list"><li>Below: ${esc(lowestDefined)}</li></ul>`;
-    }
-  }
-
-  return `<ul class="logic-list">${entries.map((l) => `<li>${esc(l)}</li>`).join("")}</ul>`;
-}
-
 // Per-hazard forecast-trend chart (Hazards tab detail card). Reads the FROZEN `series`
 // block on each hazard_detail (primary/secondary/bands), all index-aligned 1:1 to
 // forecast_hourly.hours. The line is the hazard's tier color; heat draws over its bands so
@@ -1441,8 +1393,6 @@ function renderHazards(b) {
       </summary>
       <div class="hazard-detail__body">
         <h4>Key drivers</h4><ul>${h.drivers.map((d) => `<li>${esc(d)}</li>`).join("")}</ul>
-        <h4>Threshold logic</h4>
-        ${thresholdLogicHtml(h.logic, h.label)}
         <h4>Forecast trend</h4>
         ${hazardChart(h, chartHours)}
         ${h.assumptions.map((a) => `<div class="assumption">${icon("alert", "")}<span>${esc(a)}</span></div>`).join("")}

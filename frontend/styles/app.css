@@ -691,8 +691,6 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .hazard-detail__body ul { margin: 0; padding-left: var(--space-4); }
 .hazard-detail__body li { font-size: var(--text-label); color: var(--color-text-secondary); margin: 2px 0; }
-.hazard-detail__body .logic-list { margin-top: var(--space-2); }
-.hazard-detail__body .logic-list li { margin: var(--space-1) 0; }
 
 .assumption {
   display: flex;
