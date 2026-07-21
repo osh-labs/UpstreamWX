@@ -268,6 +268,12 @@ main {
   .view.is-entering > *:nth-child(4) { animation-delay: 120ms; }
   .view.is-entering > *:nth-child(5) { animation-delay: 160ms; }
   .view.is-entering > *:nth-child(n + 6) { animation-delay: 200ms; }
+  /* iOS Safari collapses a <details> to zero height when a transform/animation is
+     applied directly to it, which made the Overview's Risk Discussion summary card
+     (the only top-level <details>) vanish on WebKit. Skip the entrance stagger for
+     <details> — it still appears with the view's own transition, exactly like the
+     Hazards-tab detail cards (which are nested, never directly animated). */
+  .view.is-entering > details { animation: none; }
 }
 
 .section-title {
