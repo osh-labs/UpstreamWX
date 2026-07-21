@@ -297,7 +297,7 @@ the noted class. Visual contract first; PRD reference in parentheses.
 ### 7.5 Confidence bar (`.confidence`) — FR-36
 - Three **equal-height** bars (not stair-stepped) plus the small gray label
   `High|Moderate|Low confidence`. Default is a compact inline row — label left,
-  bars right — right-aligned under the posture pill. The **hero** variant
+  bars right — centered under the posture pill. The **hero** variant
   (`.is-lg`, the overall-posture card only) uses larger bars stacked above the
   label, centered under the pill.
 - The filled *count* reads the engine's level: Low = 1 filled, Moderate = 2,
