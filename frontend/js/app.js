@@ -919,6 +919,22 @@ function playViewEnter(view, dir) {
   view.classList.remove("is-entering", "enter-fwd", "enter-back");
   void view.offsetWidth; // reflow so the animation replays
   view.classList.add("is-entering", dir === "back" ? "enter-back" : "enter-fwd");
+  rearmLiveChips(view);
+}
+
+// Re-arm the hero posture-chip pulse when its view is shown again. Hiding a view
+// (display:none) cancels descendant CSS animations, and some engines (WebKit) do
+// not reliably restart an infinite animation when the view returns — so the pulse
+// would silently die on the first tab away-and-back. Clearing the animation and
+// forcing a reflow restarts it from the stylesheet rule, which keeps it running
+// for the life of the briefing. Reverting to '' (not a literal keyframe) means a
+// reduced-motion user, whose rule lives behind a no-preference guard, stays still.
+function rearmLiveChips(view) {
+  view.querySelectorAll(".posture-chip.is-live").forEach((el) => {
+    el.style.animation = "none";
+    void el.offsetWidth; // reflow
+    el.style.animation = "";
+  });
 }
 
 /* ── 7.4 Overview ──────────────────────────────────────────────────── */
