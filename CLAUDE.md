@@ -572,6 +572,26 @@ a coexisting env untouched. Backend (#147): `gefs`/`refs`/`sref` `cached_cycles`
 unreadable cache root as empty (WARNING + cold-cache path) instead of 500ing the briefing, and
 `/v1/health` echoes `data_dir_ok`. Engine output unchanged (NFR-4).
 
+**Read-only-release-tree watershed fix + boot-enable + prod rebuild (2026-08-03).** Two defects
+found while promoting v0.7.0, plus the decision to rebuild the prod box. (1) **Watershed
+delineation wrote its HyRiver cache to the CWD** — under the SA-06 read-only release tree the
+service account cannot write there, so delineation failed on a deployed box while the briefing
+still rendered (an empty basin reads as benign — exactly the data-quality failure mode the
+2026-07-02 hardening exists to prevent). `watershed/_hyriver.py` now pins the cache under
+`settings.data_dir` (the one writable path, `ReadWritePaths=`); `huc.py`/`upstream.py` route
+through it. (2) **The deploy layer never enabled the API at boot** — `bootstrap.sh` enabled
+nginx only, and `deploy.sh` only ever `restart`s (it activates a release, it does not
+provision), so a provisioned box stayed `disabled` and would not survive a reboot; nothing would
+page, since the FR-12 dead-man's-switch is pinged *by* the process that would not be running.
+Production was found in exactly that state. `bootstrap.sh` now runs `systemctl enable`. (3) The
+prod box — grown incrementally since early development, provisioned pre-#132, with no
+`deploy/config.env` on the host (its deploy was therefore unreproducible) and two duplicate
+Let's Encrypt lineages — is being **rebuilt from bare metal** on a clean EC2 instance with
+`v0.7.1` as its first release: `docs/prod-rebuild-runbook-v0.7.1.md`. This is also the first
+end-to-end proof of the from-scratch `bootstrap.sh` path on production. The app carries **no
+durable state** (no DB, stateless HMAC sessions, `data_dir` is regenerable cache), so the
+migration payload is three secrets and a DNS record. Engine output unchanged (NFR-4).
+
 **Domain split (app subdomain + static landing).** The app (PWA + `/v1/*`, still
 single-origin) now lives at **`app.upstreamwx.com`**; the apex **`upstreamwx.com`** (+ `www`)
 serves a standalone **static landing page** from `landing/` — a vendored-token mirror of the
