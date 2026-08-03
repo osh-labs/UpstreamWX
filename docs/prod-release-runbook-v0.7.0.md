@@ -5,12 +5,26 @@ Promote the staging-validated changes to the **public production** box as the im
 (`docs/deployment-workflow.md`): nobody edits code on prod; the box only ever runs an exact,
 named tag.
 
-**What v0.7.0 contains** (everything on `ux-7-19-26` that is ahead of the last prod tag
-`v0.6.2`): the US/metric unit localization, the hourly hazard series + time-aware phases, and
-the 2026-07-20 staging-outage hardening (issues #146/#147/#148 + `uwx-ctl uninstall`, PR #149).
+**What v0.7.0 contains** (everything ahead of the last prod tag `v0.6.2`):
 
-**The commit being shipped:** `3d8401c` — the tip of `ux-7-19-26`, the exact commit validated
-on the staging box. Tag that commit, deploy that tag.
+- the US/metric unit localization;
+- the hourly hazard series + time-aware phases;
+- the 2026-07-20 staging-outage hardening (issues #146/#147/#148 + `uwx-ctl uninstall`, PR #149);
+- a **watershed delineation fix** under the read-only release tree — the HyRiver cache was
+  being written to CWD (`566f216`, PR #150);
+- a **deploy fix**: `uwx-ctl deploy`/`bootstrap` run the release-tree exec check as root
+  (`008efce`, PR #152);
+- a **PWA UX pass**: confidence rendered as inline equal-height bars and centred under the
+  posture pill, hazard-card confidence above the fold, Risk Discussion collapsed by default,
+  the hero posture-chip pulse kept across tab switches, and an iOS Safari fix for the summary
+  card vanishing (PRs #151/#153/#154/#155/#156).
+
+**The commit being shipped:** `5254db4` — the tip of `main` (the PR #157 merge), already
+tagged and validated on the staging box.
+
+> The first three bullets are what this runbook originally scoped (commit `3d8401c`). The rest
+> landed on `main` afterwards and are included in the tag; staging validated the tag, so the
+> validated artifact and the shipped artifact still match.
 
 > **One release-specific wrinkle:** the systemd unit **template changed** this release
 > (the data-dir pin moved into `ExecStart`). `uwx-ctl deploy` / `deploy.sh` build and activate
@@ -25,30 +39,47 @@ public names `app.upstreamwx.com` (app) + `upstreamwx.com`/`www` (landing).
 
 ---
 
-## Phase 1 — cut the release (from your laptop, not the box)
+## Phase 1 — cut the release — **already done**
 
-The fixes live on `ux-7-19-26`; prod deploys a tag off `main`. Get the code into `main`, then
-tag it.
+`main` is CI-gated and `v0.7.0` is already pushed and staging-validated. Just confirm it still
+points where you expect:
 
 ```sh
-# 1. Open a PR ux-7-19-26 -> main and let CI (ruff + hermetic pytest) go green, then merge it.
-#    (Do NOT commit to main directly — main must stay a deployable, CI-gated branch.)
-#    Merge so that main's tip is the SAME tree validated on staging (no extra commits slipped
-#    in between). If anything else lands on main first, re-validate on staging before tagging.
-
-# 2. Tag the release commit. SIGN it — prod's DEPLOY_VERIFY_TAG_SIGNATURE gate (SA-07) refuses
-#    an unsigned/invalid tag at build time. (An unsigned `-a` tag only works if that gate is 0.)
-git fetch origin main
-git tag -s v0.7.0 origin/main -m "v0.7.0 — units localization, hourly hazard series, staging-deploy hardening (#146/#147/#148)"
-git push origin v0.7.0
-
-# 3. Confirm the tag points at the staging-validated commit:
-git rev-parse v0.7.0^{commit}        # expect the commit staging ran (3d8401c's mainline equivalent)
+git fetch origin main --tags --prune
+git rev-parse v0.7.0^{commit}        # expect 5254db42560d2fb735eb6f2ec59b139e55723999
+git rev-parse origin/main            # same commit — the tag is main's tip
 ```
+
+### Note: the SA-07 signature gate does **not** apply to this release
+
+`v0.7.0` is a **lightweight** tag (a ref pointing straight at the commit), not a signed
+annotated tag object — as is every tag in this repo's history, `v0.4.0` onward. Two
+consequences you need to know before Phase 2:
+
+1. **There is no release signing key.** The `DEPLOY_VERIFY_TAG_SIGNATURE` gate landed in
+   `417ce08` (issue #132, 2026-07-18) as the verifier half of audit finding SA-07, but the
+   signing half — generate a key, publish the public half to prod's root GPG keyring, adopt
+   `git tag -s` — was explicitly deferred (`docs/sa-06-09-13-hardening-workplan.md` §7, still
+   unchecked). Do not go looking for a key that was never created.
+2. **The gate fails open, silently.** `deploy/_lib.sh` only verifies when the ref resolves to a
+   tag *object*:
+
+   ```sh
+   if [ "${DEPLOY_VERIFY_TAG_SIGNATURE:-0}" = "1" ] \
+           && [ "$(git -C "$DEPLOY_REPO_MIRROR" cat-file -t "$ref" 2>/dev/null)" = "tag" ]; then
+   ```
+
+   A lightweight tag makes the second test false, so verification is skipped with no error and
+   no log line. This is how `v0.6.x` deployed too — the gate has never actually run.
+
+So Phase 2 sets `DEPLOY_VERIFY_TAG_SIGNATURE=0`, to make the config state the truth rather than
+imply a check that silently no-ops. Both the fail-open behaviour and the key setup are tracked
+as follow-ups; neither blocks this deploy (prod pins an exact immutable tag off a CI-gated
+`main`, and tag push is restricted).
 
 Optional cosmetic: `pyproject.toml version` is stale (`0.5.0`) and does **not** drive the
 deployed version string (that comes from `git describe --tags` → `v0.7.0`). Bump it to `0.7.0`
-in the same release PR if you want the source tree to match; it changes nothing at runtime.
+if you want the source tree to match; it changes nothing at runtime.
 
 ---
 
@@ -64,15 +95,16 @@ uwx-ctl health | python3 -m json.tool | grep -E 'release|data_dir_ok|auth_active
 readlink -f /opt/upstreamwx/current
 uwx-ctl releases                     # note the previous release dir; rollback uses it
 
-# Public gates that MUST be on for a public deploy (deploy.sh enforces the first two):
+# Public gates that MUST be on for a public deploy (deploy.sh enforces REQUIRE_HTTPS):
 grep -E 'DEPLOY_(REQUIRE_HTTPS|VERIFY_TAG_SIGNATURE|BRANCH)' /etc/upstreamwx/deploy.conf
 grep -E 'UPSTREAMWX_(SESSION_SECRET|API_AUTH_REQUIRED|API_TRUSTED_HOSTS)' /etc/upstreamwx/upstreamwx.env
-#   expect DEPLOY_REQUIRE_HTTPS=1, DEPLOY_VERIFY_TAG_SIGNATURE=1,
+#   expect DEPLOY_REQUIRE_HTTPS=1,
 #          SESSION_SECRET set, API_AUTH_REQUIRED=1, API_TRUSTED_HOSTS=["app.upstreamwx.com"]
 
-# If DEPLOY_VERIFY_TAG_SIGNATURE=1, the tag signer's PUBLIC key must be in ROOT's GPG keyring:
-sudo gpg --list-keys                 # the key that signed v0.7.0 must be here, else import it:
-# sudo gpg --import /path/to/signer-pubkey.asc
+# Signature gate: set it to 0 (see Phase 1 — no release key exists, and left at 1 it silently
+# no-ops on a lightweight tag, which reads as "verified" when nothing was checked):
+sudo sed -i 's/^DEPLOY_VERIFY_TAG_SIGNATURE=.*/DEPLOY_VERIFY_TAG_SIGNATURE="0"/' /etc/upstreamwx/deploy.conf
+# No GPG keyring step this release — there is no signer key to import.
 
 # Back up the runtime env file (it holds secrets; bootstrap won't clobber it, but be safe):
 sudo cp -a /etc/upstreamwx/upstreamwx.env /root/upstreamwx.env.$(date -u +%Y%m%dT%H%M%SZ).bak
@@ -98,9 +130,9 @@ cp deploy/config.env.example deploy/config.env   # only if you don't already kee
 
 Pin prod to the immutable tag, then run bootstrap from the clone. `bootstrap` re-renders the
 hardened systemd unit + nginx sites, comments out any stale `UPSTREAMWX_DATA_DIR` in the env
-file, `daemon-reload`s, then hands off to `deploy.sh` which **verifies the tag signature
-(SA-07)**, builds a fresh root-owned release, warms the caches, **atomically flips `current`**,
-restarts, and **blocks on `/v1/health` — auto-rolling-back** if the new release is unhealthy.
+file, `daemon-reload`s, then hands off to `deploy.sh` which builds a fresh root-owned release,
+warms the caches, **atomically flips `current`**, restarts, and **blocks on `/v1/health` —
+auto-rolling-back** if the new release is unhealthy.
 
 ```sh
 # 1. Pin the deploy config to the tag (bootstrap has no ref argument; it deploys DEPLOY_BRANCH,
@@ -111,13 +143,14 @@ sudo sed -i 's/^DEPLOY_BRANCH=.*/DEPLOY_BRANCH="v0.7.0"/' /etc/upstreamwx/deploy
 sed        -i 's/^DEPLOY_BRANCH=.*/DEPLOY_BRANCH="v0.7.0"/' deploy/config.env
 
 # 2. Run the promotion. #146 conflict checks pass (prod matches its own config). Watch the tail
-#    for: "tag signature verified", the health JSON, and "deployed v0.7.0".
+#    for: the health JSON, and "deployed v0.7.0".
+#    Do NOT expect a "tag signature verified" line — see Phase 1; nothing is verified this
+#    release, and its absence is not a failure.
 sudo DEPLOY_CONFIG=deploy/config.env deploy/bootstrap.sh
 ```
 
-A public `bootstrap`/`deploy` will **refuse** (non-zero, no activation) if HTTPS isn't live or
-the tag signature fails — that is the gate doing its job, not a regression. Fix the flagged
-cause and re-run.
+A public `bootstrap`/`deploy` will **refuse** (non-zero, no activation) if HTTPS isn't live —
+that is the gate doing its job, not a regression. Fix the flagged cause and re-run.
 
 > **nginx note:** bootstrap `restart`s nginx (to pick up group membership); expect a sub-second
 > blip on the public site. The app (uvicorn) is only restarted by the atomic flip after the new
@@ -139,11 +172,22 @@ PID=$(systemctl show -p MainPID --value upstreamwx-api)
 sudo cat /proc/$PID/environ | tr '\0' '\n' | grep UPSTREAMWX_DATA_DIR
 #   UPSTREAMWX_DATA_DIR=/var/lib/upstreamwx
 
-# c) A real current-window briefing over HTTPS returns 200 (health doesn't write; this does):
-curl -s -o /dev/null -w '%{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
+# c) A real current-window briefing over HTTPS returns 200 (health doesn't write; this does).
+#    The window MUST be in the future or MissionSpec currency validation rejects it — this
+#    builds one two days out rather than hard-coding a date that goes stale:
+D=$(date -u -d '+2 days' +%Y-%m-%d)
+curl -s -o /tmp/brief.json -w '%{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
   -H 'content-type: application/json' \
-  -d '{"lat":37.0192,"lon":-111.9889,"activity":"canyon","start":"2026-07-22T14:00","end":"2026-07-22T22:00"}'
-#   (use a start/end a day or two ahead so the window is current)
+  -d "{\"lat\":37.0192,\"lon\":-111.9889,\"activity\":\"canyon\",\"start\":\"${D}T14:00\",\"end\":\"${D}T22:00\"}"
+#   expect 200
+
+# c2) THIS RELEASE ships the watershed fix (566f216 — HyRiver cache was written to CWD, which
+#     the read-only release tree forbids). A 200 alone does not prove it worked: the basin can
+#     come back empty while the briefing still renders. Confirm a real upstream basin:
+python3 -c "import json;b=json.load(open('/tmp/brief.json'));w=b.get('watershed') or {};print('area_sq_mi:',w.get('area_sq_mi'),'geometry:',bool(w.get('geometry')))"
+#   expect a non-zero area and geometry True. Also confirm nothing is trying to write to the
+#   release tree:
+uwx-ctl logs -n 200 --no-pager | grep -iE 'read-only|permission denied|hyriver|pygeohydro' || echo "clean"
 
 # d) Public surfaces: app shell, landing page, and HTTP->HTTPS redirect
 curl -sI https://app.upstreamwx.com/ | head -1          # 200
@@ -195,9 +239,23 @@ single wrapper command (no bootstrap needed unless a future release again edits
 
 ```sh
 # On the box, after the tag is pushed:
-uwx-ctl deploy v0.7.1     # signature-verified (it's a tag), health-gated, auto-rollback
+uwx-ctl deploy v0.7.1     # health-gated, auto-rollback
 ```
 
 If you left `DEPLOY_BRANCH` pinned to a tag in `deploy.conf`, a bare `uwx-ctl deploy` re-deploys
 that pinned tag; always pass the new tag explicitly to move forward. Keep pinning prod to tags —
 never let the prod box track a moving branch.
+
+---
+
+## Follow-ups carried out of this release
+
+Neither blocks v0.7.0; both should land before the signature gate is trusted.
+
+1. **`DEPLOY_VERIFY_TAG_SIGNATURE` fails open** (`deploy/_lib.sh`). When the gate is on but the
+   ref is not a signed tag object, the deploy proceeds silently instead of refusing. It should
+   fail closed, so turning the flag on cannot produce a false sense of verification.
+2. **No release signing key exists** (SA-07, deferred from issue #132). Closing it means
+   generating a release key, deciding where the private half lives, importing the public half
+   into **root's** GPG keyring on prod, and switching releases to `git tag -s`. Until then
+   `DEPLOY_VERIFY_TAG_SIGNATURE` stays `0` on every environment.
