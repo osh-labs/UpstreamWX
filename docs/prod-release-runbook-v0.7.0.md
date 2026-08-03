@@ -231,14 +231,30 @@ PID=$(systemctl show -p MainPID --value upstreamwx-api)
 sudo cat /proc/$PID/environ | tr '\0' '\n' | grep UPSTREAMWX_DATA_DIR
 #   UPSTREAMWX_DATA_DIR=/var/lib/upstreamwx
 
-# c) A real current-window briefing over HTTPS returns 200 (health doesn't write; this does).
+# c) A real current-window briefing over HTTPS (health doesn't write; this does).
+#    Mint a session FIRST: with the SA-01 gate active (auth_active true) every /v1/* path
+#    except health and session fails closed, so an un-cookied POST returns 401 — the gate
+#    working, NOT a broken deploy. This is what the PWA's ensureSession() does on boot.
+curl -s -c /tmp/uwx.jar -X POST https://app.upstreamwx.com/v1/session \
+  -o /dev/null -w 'session mint: %{http_code}\n'          # 200
+
 #    The window MUST be in the future or MissionSpec currency validation rejects it — this
-#    builds one two days out rather than hard-coding a date that goes stale:
+#    builds one two days out rather than hard-coding a date that goes stale. Cold caches on a
+#    fresh release: expect ~25-60 s, not a hang.
 D=$(date -u -d '+2 days' +%Y-%m-%d)
-curl -s -o /tmp/brief.json -w '%{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
+time curl -s -b /tmp/uwx.jar -c /tmp/uwx.jar \
+  -o /tmp/brief.json -w '%{http_code}\n' \
+  -X POST https://app.upstreamwx.com/v1/briefing \
   -H 'content-type: application/json' \
   -d "{\"lat\":37.0192,\"lon\":-111.9889,\"activity\":\"canyon\",\"start\":\"${D}T14:00\",\"end\":\"${D}T22:00\"}"
 #   expect 200
+
+# c1) Standing smoke test — the SAME call without a cookie must be refused. If this ever
+#     returns 200, the access gate has silently opened.
+curl -s -o /dev/null -w 'unauthenticated: %{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
+  -H 'content-type: application/json' \
+  -d "{\"lat\":37.0192,\"lon\":-111.9889,\"activity\":\"canyon\",\"start\":\"${D}T14:00\",\"end\":\"${D}T22:00\"}"
+#   expect 401
 
 # c2) THIS RELEASE ships the watershed fix (566f216 — HyRiver cache was written to CWD, which
 #     the read-only release tree forbids). A 200 alone does not prove it worked: the basin can
@@ -248,10 +264,15 @@ python3 -c "import json;b=json.load(open('/tmp/brief.json'));w=b.get('watershed'
 #   release tree:
 uwx-ctl logs -n 200 --no-pager | grep -iE 'read-only|permission denied|hyriver|pygeohydro' || echo "clean"
 
-# d) Public surfaces: app shell, landing page, and HTTP->HTTPS redirect
+# d) Public surfaces: app shell, landing page, and HTTP->HTTPS redirect.
+#    Do NOT probe /v1/health with `curl -I` (HEAD): FastAPI's @app.get registers GET only
+#    (APIRoute does not auto-add HEAD, unlike Starlette's plain Route), so a HEAD falls through
+#    to the catch-all PWA StaticFiles mount and 404s on a healthy service. Same reason external
+#    uptime monitors must be configured for GET.
 curl -sI https://app.upstreamwx.com/ | head -1          # 200
 curl -sI https://upstreamwx.com/      | head -1          # 200 (static landing)
-curl -sI http://app.upstreamwx.com/v1/health | grep -i location   # 301/308 -> https
+curl -sI http://app.upstreamwx.com/   | grep -i location          # 301/308 -> https
+curl -s -o /dev/null -w '%{http_code}\n' https://app.upstreamwx.com/v1/health   # 200 (GET)
 
 # e) TLS renewal timer still healthy (unchanged by this deploy, but confirm):
 sudo certbot renew --dry-run 2>&1 | tail -3
