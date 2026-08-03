@@ -237,6 +237,15 @@ else
 fi
 [ -e /etc/nginx/sites-enabled/default ] && rm -f /etc/nginx/sites-enabled/default
 systemctl daemon-reload
+
+# Enable the API at boot. deploy.sh only ever `restart`s (it activates a release, it does not
+# provision), so without this the unit stays `disabled` and the service does NOT come back
+# after a reboot — a silent outage nothing pings about, since the FR-12 dead-man's-switch is
+# pinged BY the process that wouldn't be running. `enable` (not `--now`) only writes the
+# multi-user.target.wants symlink; the running process is untouched, and deploy.sh restarts it.
+systemctl enable "${DEPLOY_SERVICE}" >/dev/null 2>&1 \
+    && ok "enabled ${DEPLOY_SERVICE} at boot" \
+    || warn "could not enable ${DEPLOY_SERVICE} at boot — check 'systemctl is-enabled ${DEPLOY_SERVICE}'"
 if _nginx_out="$(nginx -t 2>&1)"; then
     systemctl enable nginx >/dev/null 2>&1 || true
     # restart (not reload) so nginx workers pick up the DEPLOY_GROUP membership added above

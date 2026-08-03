@@ -85,30 +85,53 @@ if you want the source tree to match; it changes nothing at runtime.
 
 ## Phase 2 — pre-flight on the prod box (no changes yet)
 
+> **`uwx-ctl` does not exist on the box yet, and that is expected.** The wrapper was added in
+> `dd9c3e1` (2026-07-20), *after* `v0.6.2` was cut — it is not in any tag before `v0.7.0`.
+> Bootstrap installs it during Phase 3, so this release is what creates it. Every pre-flight
+> check below therefore uses the raw commands, not the wrapper. For the same reason there is
+> no persisted `/etc/upstreamwx/deploy.conf` yet (bootstrap writes it), so `DEPLOY_BRANCH` and
+> the gates are set in the **clone's** `deploy/config.env` only.
+
 SSH in, then confirm the box is healthy on the OLD release and that the public gates are set
 before you touch anything.
 
 ```sh
-# Current state — record the release you're rolling FROM (for a manual rollback target).
-uwx-ctl version
-uwx-ctl health | python3 -m json.tool | grep -E 'release|data_dir_ok|auth_active|trusted_hosts'
-readlink -f /opt/upstreamwx/current
-uwx-ctl releases                     # note the previous release dir; rollback uses it
+# Current state — record the release you're rolling FROM (this is your manual rollback target).
+systemctl status upstreamwx-api --no-pager | head -5
+curl -s 127.0.0.1:8000/v1/health | python3 -m json.tool | grep -E 'release|auth_active|trusted_hosts'
+curl -s 127.0.0.1:8000/version.json
+readlink -f /opt/upstreamwx/current      # e.g. /opt/upstreamwx/releases/b67cd17  <- ROLLBACK TARGET
+ls -1t /opt/upstreamwx/releases/
+#   `data_dir_ok` is absent on v0.6.2 — that field ships in #147, i.e. WITH v0.7.0. Not a fault.
 
-# Public gates that MUST be on for a public deploy (deploy.sh enforces REQUIRE_HTTPS):
-grep -E 'DEPLOY_(REQUIRE_HTTPS|VERIFY_TAG_SIGNATURE|BRANCH)' /etc/upstreamwx/deploy.conf
-grep -E 'UPSTREAMWX_(SESSION_SECRET|API_AUTH_REQUIRED|API_TRUSTED_HOSTS)' /etc/upstreamwx/upstreamwx.env
-#   expect DEPLOY_REQUIRE_HTTPS=1,
-#          SESSION_SECRET set, API_AUTH_REQUIRED=1, API_TRUSTED_HOSTS=["app.upstreamwx.com"]
+# The service must be enabled at boot. The deploy layer never ran `systemctl enable` on it
+# (only nginx), so a box provisioned before that fix is one reboot from a silent outage:
+systemctl is-enabled upstreamwx-api      # want: enabled
+sudo systemctl enable upstreamwx-api     # if it says `disabled`. NOT --now; the process is untouched.
 
-# Signature gate: set it to 0 (see Phase 1 — no release key exists, and left at 1 it silently
-# no-ops on a lightweight tag, which reads as "verified" when nothing was checked):
-sudo sed -i 's/^DEPLOY_VERIFY_TAG_SIGNATURE=.*/DEPLOY_VERIFY_TAG_SIGNATURE="0"/' /etc/upstreamwx/deploy.conf
-# No GPG keyring step this release — there is no signer key to import.
+# Public gates (the env file is 0640 root:upstreamwx — sudo is required to read it):
+sudo grep -E 'UPSTREAMWX_(SESSION_SECRET|API_AUTH_REQUIRED|API_TRUSTED_HOSTS)' /etc/upstreamwx/upstreamwx.env
+#   expect SESSION_SECRET set, API_AUTH_REQUIRED=1, API_TRUSTED_HOSTS=["app.upstreamwx.com"]
+
+# No GPG keyring step and no DEPLOY_VERIFY_TAG_SIGNATURE edit here — there is no persisted
+# deploy.conf yet, and no signer key exists (Phase 1). The gate is set in the clone's config
+# below.
 
 # Back up the runtime env file (it holds secrets; bootstrap won't clobber it, but be safe):
 sudo cp -a /etc/upstreamwx/upstreamwx.env /root/upstreamwx.env.$(date -u +%Y%m%dT%H%M%SZ).bak
 ```
+
+> **Never paste the contents of `upstreamwx.env` into a chat, ticket, or terminal recording.**
+> `UPSTREAMWX_SESSION_SECRET` is the HMAC key for every SA-01 session token. If it is exposed,
+> rotate it — tokens are stateless, so clients simply re-mint on the next 401 and the only cost
+> is invalidating outstanding cookies:
+>
+> ```sh
+> sudo sed -i "s|^UPSTREAMWX_SESSION_SECRET=.*|UPSTREAMWX_SESSION_SECRET=$(openssl rand -hex 32)|" /etc/upstreamwx/upstreamwx.env
+> sudo grep -c '^UPSTREAMWX_SESSION_SECRET=' /etc/upstreamwx/upstreamwx.env    # expect 1
+> ```
+>
+> Fold the rotation in before Phase 3 so the deploy's restart picks it up.
 
 Refresh the deploy-scripts clone the bootstrap will run FROM to the v0.7.0 templates (bootstrap
 reads templates from the running scripts' own repo, not from the release tree):
@@ -117,12 +140,40 @@ reads templates from the running scripts' own repo, not from the release tree):
 cd ~/upstreamwx-src 2>/dev/null || git clone https://github.com/osh-labs/upstreamwx.git ~/upstreamwx-src && cd ~/upstreamwx-src
 git fetch origin --tags --prune
 git checkout v0.7.0                  # run the deploy from the tagged tree itself
-cp deploy/config.env.example deploy/config.env   # only if you don't already keep deploy/config.env; then re-apply prod names/gates
+ls -l deploy/config.env              # do you already have a filled-in one?
 ```
 
-> If you keep a filled-in `deploy/config.env` on the box, use it as-is — don't overwrite it.
-> The persisted `/etc/upstreamwx/deploy.conf` is what `uwx-ctl` uses; `deploy/config.env` is
-> only what a from-clone `bootstrap` reads.
+**`deploy/config.env` is the single most dangerous file in this promotion.** There is no
+persisted `/etc/upstreamwx/deploy.conf` to fall back on, so whatever is in this file *is* the
+deploy's entire idea of the environment — and bootstrap will persist it to
+`/etc/upstreamwx/deploy.conf`, baking it into the `uwx-ctl` it installs. A stock
+`config.env.example` copied blindly would deploy `DEPLOY_BRANCH="main"` with
+`DEPLOY_REQUIRE_HTTPS="0"` and an empty `DEPLOY_CERTBOT_EMAIL`.
+
+If you have a filled-in `deploy/config.env`, keep it and only change `DEPLOY_BRANCH`. If you do
+not, build one from the example and set every value below, then re-read it before running:
+
+```sh
+cp deploy/config.env.example deploy/config.env
+```
+
+| Key | Prod value | Why |
+|---|---|---|
+| `DEPLOY_BRANCH` | `"v0.7.0"` | the immutable tag, not a moving branch |
+| `DEPLOY_APP_SERVER_NAME` | `"app.upstreamwx.com"` | app vhost |
+| `DEPLOY_LANDING_SERVER_NAME` | `"upstreamwx.com www.upstreamwx.com"` | apex landing; **empty disables TLS setup entirely** |
+| `DEPLOY_LANDING_ROOT` | `/opt/upstreamwx/current/landing` | |
+| `DEPLOY_REQUIRE_HTTPS` | `"1"` | prod already has a cert; the SA-01 cookie is `Secure` and inert without TLS |
+| `DEPLOY_CERTBOT_EMAIL` | your real address | empty ⇒ bootstrap skips certbot |
+| `DEPLOY_VERIFY_TAG_SIGNATURE` | `"0"` | no signer key exists (Phase 1) |
+| `DEPLOY_APP_DIR` / `DEPLOY_DATA_DIR` / `DEPLOY_ENV_FILE` | `/opt/upstreamwx` / `/var/lib/upstreamwx` / `/etc/upstreamwx/upstreamwx.env` | must match the running box (#146 hard-blocks a mismatch) |
+| `DEPLOY_SERVICE` / `DEPLOY_BIND_PORT` | `upstreamwx-api` / `8000` | must match the running service |
+
+Confirm before you run — a wrong path here is how the 2026-07-20 staging outage happened:
+
+```sh
+grep -E '^DEPLOY_(BRANCH|APP_DIR|DATA_DIR|SERVICE|BIND_PORT|REQUIRE_HTTPS|VERIFY_TAG_SIGNATURE|APP_SERVER_NAME|LANDING_SERVER_NAME|CERTBOT_EMAIL)=' deploy/config.env
+```
 
 ---
 
@@ -135,12 +186,11 @@ warms the caches, **atomically flips `current`**, restarts, and **blocks on `/v1
 auto-rolling-back** if the new release is unhealthy.
 
 ```sh
-# 1. Pin the deploy config to the tag (bootstrap has no ref argument; it deploys DEPLOY_BRANCH,
-#    and deploying the *tag ref* is what triggers SA-07 signature verification — a branch skips
-#    it). Pinning prod to an immutable tag is also the correct end state (better than tracking a
-#    moving `main`). Set it in BOTH the persisted config and the clone's config:
-sudo sed -i 's/^DEPLOY_BRANCH=.*/DEPLOY_BRANCH="v0.7.0"/' /etc/upstreamwx/deploy.conf
-sed        -i 's/^DEPLOY_BRANCH=.*/DEPLOY_BRANCH="v0.7.0"/' deploy/config.env
+# 1. Pin the deploy to the tag (bootstrap has no ref argument; it deploys DEPLOY_BRANCH).
+#    Pinning prod to an immutable tag is the correct end state — never track a moving branch.
+#    ONLY the clone's config: /etc/upstreamwx/deploy.conf does not exist yet, and bootstrap
+#    creates it FROM this file.
+sed -i 's/^DEPLOY_BRANCH=.*/DEPLOY_BRANCH="v0.7.0"/' deploy/config.env
 
 # 2. Run the promotion. #146 conflict checks pass (prod matches its own config). Watch the tail
 #    for: the health JSON, and "deployed v0.7.0".
@@ -155,6 +205,15 @@ that is the gate doing its job, not a regression. Fix the flagged cause and re-r
 > **nginx note:** bootstrap `restart`s nginx (to pick up group membership); expect a sub-second
 > blip on the public site. The app (uvicorn) is only restarted by the atomic flip after the new
 > release is built, so the API is not down during the build.
+
+New after this run (none of it existed on the box before):
+
+```sh
+which uwx-ctl                        # /usr/local/bin/uwx-ctl — installed by bootstrap
+sudo ls -l /etc/upstreamwx/deploy.conf   # persisted from the clone's config.env
+systemctl is-enabled upstreamwx-api  # enabled — bootstrap now enables the API at boot
+ls -1t /opt/upstreamwx/releases/     # 5254db4 (new) + b67cd17 (rollback target)
+```
 
 ---
 
@@ -215,6 +274,9 @@ v0.7.0.
 Releases are immutable and kept on disk (`DEPLOY_KEEP_RELEASES`, default 5), so rollback is
 cheap.
 
+Going into this release the box holds exactly **one** release, `b67cd17` (= `v0.6.2`). That is
+your only rollback target, and it is the one the automatic path will use.
+
 - **Automatic:** if the new release fails the post-deploy `/v1/health` check, `deploy.sh`
   flips `current` back to the previous release and restarts — the run ends with
   "ROLLED BACK to …". Nothing to do but investigate.
@@ -252,6 +314,10 @@ never let the prod box track a moving branch.
 
 Neither blocks v0.7.0; both should land before the signature gate is trusted.
 
+0. **The API was never enabled at boot.** `bootstrap.sh` enabled nginx but never the app
+   service, so prod sat `disabled` — one reboot from a silent outage that nothing would page
+   about (the FR-12 dead-man's-switch is pinged *by* the process that would not be running).
+   Fixed in this branch; run `systemctl is-enabled upstreamwx-api` on **staging** too.
 1. **`DEPLOY_VERIFY_TAG_SIGNATURE` fails open** (`deploy/_lib.sh`). When the gate is on but the
    ref is not a signed tag object, the deploy proceeds silently instead of refusing. It should
    fail closed, so turning the flag on cannot produce a false sense of verification.
