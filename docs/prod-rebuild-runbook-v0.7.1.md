@@ -108,6 +108,11 @@ sudo git rev-parse HEAD
 > Clone to `/root`, **not** under `/opt/upstreamwx`. `${DEPLOY_APP_DIR}/repo` is the deploy's own
 > git mirror (`_lib.sh:65`) — running the scripts from inside the tree they fetch into is asking
 > for confusion.
+>
+> `/root` is mode `0700`, so a non-root login (e.g. `ssm-user`) cannot even `cd` into the clone.
+> **Take a root shell for the rest of this runbook** — `sudo -i` — rather than prefixing every
+> command; `bootstrap.sh` must run as root anyway. Commands below assume you are root.
+> `git checkout v0.7.1` leaves you in detached HEAD; that is expected and correct for a tag.
 
 ---
 
@@ -270,41 +275,65 @@ sudo cat /proc/$PID/environ | tr '\0' '\n' | grep UPSTREAMWX_DATA_DIR
 #   UPSTREAMWX_DATA_DIR=/var/lib/upstreamwx
 sudo grep -n '^UPSTREAMWX_DATA_DIR' /etc/upstreamwx/upstreamwx.env || echo "no active data-dir line (correct)"
 
-# c) A real current-window briefing (health does not write; this does)
+# c) Mint an anonymous session FIRST. With the SA-01 gate active every /v1/* path except
+#    health and session fails closed, so an unauthenticated briefing POST returns 401 — the
+#    gate working, not a broken deploy. This is what the PWA's ensureSession() does on boot.
+curl -s -c /tmp/uwx.jar -X POST https://app.upstreamwx.com/v1/session \
+  -o /dev/null -w 'session mint: %{http_code}\n'
+#   200
+
+# d) A real current-window briefing, carrying the cookie (health does not write; this does).
+#    Cold caches (GEFS/REFS + a cold pour-point delineation) — EXPECT ~25-60 s on first call.
 D=$(date -u -d '+2 days' +%Y-%m-%d)
-curl -s -o /tmp/brief.json -w '%{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
+time curl -s -b /tmp/uwx.jar -c /tmp/uwx.jar \
+  -o /tmp/brief.json -w '%{http_code}\n' \
+  -X POST https://app.upstreamwx.com/v1/briefing \
   -H 'content-type: application/json' \
   -d "{\"lat\":37.0192,\"lon\":-111.9889,\"activity\":\"canyon\",\"start\":\"${D}T14:00\",\"end\":\"${D}T22:00\"}"
 #   200
 
-# d) The watershed fix (566f216 — HyRiver cache was written to CWD, which the read-only
+# d2) Keep the un-cookied call as a STANDING smoke test: if /v1/briefing ever returns 200
+#     without a session, the access gate has silently opened.
+curl -s -o /dev/null -w 'unauthenticated: %{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing \
+  -H 'content-type: application/json' \
+  -d "{\"lat\":37.0192,\"lon\":-111.9889,\"activity\":\"canyon\",\"start\":\"${D}T14:00\",\"end\":\"${D}T22:00\"}"
+#   401
+
+# e) The watershed fix (566f216 — HyRiver cache was written to CWD, which the read-only
 #    release tree forbids). A 200 alone does not prove it: the basin can come back empty
 #    while the briefing still renders.
 python3 -c "import json;b=json.load(open('/tmp/brief.json'));w=b.get('watershed') or {};print('area_sq_mi:',w.get('area_sq_mi'),'geometry:',bool(w.get('geometry')))"
-#   non-zero area, geometry True
+#   non-zero area, geometry True (Buckskin Gulch ~488 sq mi on the 2026-08-03 rebuild)
 uwx-ctl logs -n 200 --no-pager | grep -iE 'read-only|permission denied|hyriver' || echo "clean"
 
-# e) PDF export — exercises the SA-08 Chromium sandbox against this host's userns policy
-curl -s -o /tmp/b.pdf -w '%{http_code}\n' -X POST https://app.upstreamwx.com/v1/briefing/pdf \
+# f) PDF export — exercises the SA-08 Chromium sandbox against this host's userns policy
+curl -s -b /tmp/uwx.jar -o /tmp/b.pdf -w '%{http_code}\n' \
+  -X POST https://app.upstreamwx.com/v1/briefing/pdf \
   -H 'content-type: application/json' --data-binary @/tmp/brief.json
-file /tmp/b.pdf        # PDF document
+file /tmp/b.pdf        # PDF document, N page(s)
 
-# f) Public surfaces + redirect
+# g) Public surfaces + redirect. NOTE: use GET, not `curl -I` (HEAD), against /v1/health —
+#    FastAPI's @app.get registers GET only (APIRoute does not auto-add HEAD, unlike Starlette's
+#    plain Route), so a HEAD falls through to the catch-all PWA StaticFiles mount and 404s on a
+#    perfectly healthy service. Point external uptime monitors at GET for the same reason.
 curl -sI https://app.upstreamwx.com/ | head -1                     # 200
 curl -sI https://upstreamwx.com/      | head -1                    # 200 (static landing)
-curl -sI http://app.upstreamwx.com/v1/health | grep -i location    # 301/308 -> https
+curl -sI http://app.upstreamwx.com/   | grep -i location           # 301/308 -> https
 curl -sI https://app.upstreamwx.com/ | grep -i strict-transport    # HSTS present
+curl -s -o /dev/null -w '%{http_code}\n' https://app.upstreamwx.com/v1/health   # 200 (GET)
 
-# g) Unknown-Host handling (SA-09 default server) — expect 444/400, not the app
-curl -sI https://app.upstreamwx.com/ -H 'Host: evil.example' | head -1
+# h) Unknown-Host handling (SA-09 default server). nginx `return 444` closes the connection
+#    with no response, so curl reports 000 — that is a PASS, not a failure.
+curl -sk https://<this-box-public-ip>/ -H 'Host: evil.example' -o /dev/null -w '%{http_code}\n'
+#   000 (444, connection closed) — the app was never reached
 
-# h) Renewal works from THIS box (only meaningful now that DNS points here)
+# i) Renewal works from THIS box (only meaningful now that DNS points here)
 sudo certbot renew --dry-run 2>&1 | tail -3
 
-# i) Boot survival — the whole reason this rebuild exists
+# j) Boot survival — the whole reason this rebuild exists
 systemctl is-enabled upstreamwx-api    # enabled
 
-# j) Scheduler + dead-man's-switch
+# k) Scheduler + dead-man's-switch
 uwx-ctl logs -n 30 --no-pager | grep -iE 'scheduler|cycle|healthcheck' || true
 sudo grep -E 'UPSTREAMWX_HEALTHCHECK_URL' /etc/upstreamwx/upstreamwx.env
 ```
@@ -347,6 +376,42 @@ Only after Phase 5 passes clean, and not the same day.
 | New box up but misbehaving | `uwx-ctl rollback` — but note a freshly built box has **only one** release, so there is no earlier release to fall back to. The rollback at this stage is the old *box*, not an old release. |
 
 ---
+
+## Execution record — 2026-08-03
+
+Executed on a clean EC2 instance (4 GB RAM, 30 GB root, Elastic IP re-associated so the public
+names cut over ahead of provisioning). **First end-to-end proof of the from-scratch
+`bootstrap.sh` path on production.** Both bootstrap passes completed with no errors.
+
+Deviations from the runbook as written, all folded back into the text above:
+
+- **`DEPLOY_CERTBOT_EMAIL` left empty for pass 1.** Bootstrap creates the ACME webroot and the
+  nginx `:80` block, so issuance cannot be rehearsed until after it runs. Empty email ⇒
+  `setup_tls_webroot` skips certbot ⇒ `--dry-run` rehearsal against a real webroot ⇒ set the
+  email and re-run. A misconfiguration then costs a staging attempt, not a rate-limit slot.
+- **EIP moved before provisioning**, so the temp-IP HTTP validation step was moot and DNS was
+  already correct when certbot ran.
+- Host baseline additions: a 4 GB swapfile with `vm.swappiness=10` (EBS-backed swap — at the
+  default 60 the kernel pages out warm memory and briefings get mysteriously slow), and
+  `kernel.apparmor_restrict_unprivileged_userns=0` for the SA-08 Chromium sandbox.
+- `UPSTREAMWX_NWS_USER_AGENT` did **not** need carrying from the old box — bootstrap renders a
+  valid self-identifying UA from the env example.
+
+Validation results:
+
+| Check | Result |
+|---|---|
+| `release` / `data_dir_ok` / `auth_active` / `trusted_hosts` | `v0.7.1` / true / true / true |
+| Data-dir pin in process env; no active line in env file | pinned; absent (the 2026-07-20 outage condition, verified absent) |
+| Session mint → briefing | 200, **25.8 s** cold |
+| Un-cookied briefing | 401 (gate enforcing) |
+| **Watershed (566f216)** | `area_sq_mi: 487.6`, `geometry: True`, logs clean |
+| PDF export (SA-08 sandbox, no `--no-sandbox`) | 200, `PDF document, 2 page(s)` |
+| Unknown Host | `000` (nginx 444) |
+| HSTS / `certbot renew --dry-run` | present / success |
+| `systemctl is-enabled` | `enabled` |
+
+Certificate: one lineage `app.upstreamwx.com`, 3 SANs, 89 days. No duplicates on the clean box.
 
 ## Follow-ups this rebuild does not close
 
