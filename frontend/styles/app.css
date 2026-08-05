@@ -71,6 +71,69 @@ main {
 }
 
 /* ── 7.1 App header ────────────────────────────────────────────────── */
+/* ── Add-to-Home-Screen banner ─────────────────────────────────────────
+ * First child of .app and in normal flow (not fixed like the update/busy banners),
+ * so it pushes the header down rather than covering it — this one persists until
+ * dismissed, where those are transient. Brand-dim rather than a severity token: an
+ * install reminder must not read as a hazard (FR-35 severity ladder). */
+.install-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  padding-top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  background: var(--color-brand-dim);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.install-banner[hidden] { display: none; }
+.install-banner__text {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
+.install-banner__text b { color: var(--color-text); font-weight: 650; }
+/* Inline share glyph, sized to sit on the text baseline mid-sentence. */
+.install-banner__glyph {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.25em;
+  color: var(--color-brand);
+}
+.install-banner__cta {
+  flex-shrink: 0;
+  padding: 5px var(--space-3);
+  border: 1px solid var(--color-brand);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand);
+  color: var(--color-text-inverse);
+  font-size: var(--text-caption);
+  font-weight: 650;
+  cursor: pointer;
+}
+.install-banner__cta:hover { background: var(--color-brand-strong); }
+.install-banner__close {
+  flex-shrink: 0;
+  /* 32px box on an 11px glyph — the dismiss must be comfortably tappable. */
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.install-banner__close:hover { color: var(--color-text); }
+
 .app-header {
   position: relative;
   z-index: 2; /* sit above the scrolling view so the drop-shadow reads */

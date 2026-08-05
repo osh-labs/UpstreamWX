@@ -17,6 +17,52 @@ const TABS = [
 ];
 
 const ACK_KEY = "uwx.ack.v1"; // first-run acknowledgment (FR-31)
+
+/* ── Display mode: browser tab vs installed PWA ────────────────────────
+ * Two signals are needed because they cover different browsers:
+ *   - `(display-mode: …)` is the standard media query (Web App Manifest spec).
+ *     Chromium and Firefox have had it for years; Safari only from 16.4.
+ *   - `navigator.standalone` is Apple's non-standard flag. It is the ONLY signal
+ *     on iOS below 16.4 — which is where most of this app's installs happen — so
+ *     it stays in the OR regardless of how good Safari's support gets.
+ * Note this reports how *this window* is running, not whether the app is installed:
+ * someone with UpstreamWX on their Home Screen who opens the site in a Safari tab
+ * reads as "browser", which is exactly what the install banner wants to know.
+ * The only API for true install state is Chromium's getInstalledRelatedApps(), which
+ * does not exist on iOS — so we deliberately don't try. */
+const DISPLAY_MODES = ["standalone", "minimal-ui", "fullscreen", "window-controls-overlay"];
+
+function displayMode() {
+  if (window.navigator.standalone === true) return "standalone";
+  for (const m of DISPLAY_MODES) {
+    if (window.matchMedia?.(`(display-mode: ${m})`).matches) return m;
+  }
+  return "browser";
+}
+
+function isInstalledDisplay() {
+  return displayMode() !== "browser";
+}
+
+/* Stamp <html data-display-mode="…"> so CSS and JS share one source of truth, and keep
+ * it live: a desktop PWA can be popped back into a tab, and `appinstalled` fires
+ * mid-session when the user accepts an install prompt. onChange runs on every change. */
+function initDisplayMode(onChange) {
+  const apply = () => {
+    const mode = displayMode();
+    if (document.documentElement.dataset.displayMode === mode) return;
+    document.documentElement.dataset.displayMode = mode;
+    if (onChange) onChange(mode);
+  };
+  apply();
+  for (const m of DISPLAY_MODES) {
+    // addEventListener on a MediaQueryList is Safari 14+; guard for older WebKit.
+    window.matchMedia?.(`(display-mode: ${m})`)?.addEventListener?.("change", apply);
+  }
+  window.addEventListener("appinstalled", apply);
+  return apply;
+}
+
 const esc = (s) =>
   String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -79,6 +125,7 @@ const DEFAULT_PREFS = {
   approach_hrs: PHASE_DEFAULT_HR,
   egress_hrs: PHASE_DEFAULT_HR,
   units: "us", // display system: "us" customary or "metric" (FR-9); sent with each briefing
+  install_nag_dismissed_at: null, // ISO timestamp; the Add-to-Home-Screen banner snoozes
 };
 
 // -- Display units -----------------------------------------------------------------
@@ -3222,37 +3269,102 @@ function initSettingsControls() {
 }
 
 /* ── Add to Home Screen ────────────────────────────────────────────────
- * Capture the browser's install prompt and surface a one-tap "Install app" pill in the
- * status bar. Chromium fires `beforeinstallprompt`; Safari/iOS never do (users install
- * via Share → Add to Home Screen), so the pill just stays hidden there — pure
- * progressive enhancement. The apex landing page (landing/) points here for this button.
+ * Two surfaces, one controller so they can never both nag at once:
+ *   - the status-bar "Install app" pill (compact, always available), and
+ *   - a dismissible banner at the top of the app column (the reminder).
+ * Chromium fires `beforeinstallprompt`, which we capture for a one-tap install.
+ * Safari/iOS never fires it: "Add to Home Screen" lives in Safari's own share menu
+ * and there is NO API that opens it (navigator.share() opens the Web Share sheet,
+ * which does not contain that action). So on iOS the banner can only describe the
+ * path — hence the inline share glyph. The apex landing page (landing/) links here.
  */
-function initInstallPrompt() {
-  const btn = document.getElementById("install-app");
-  if (!btn) return;
-  // Already installed (running standalone) → no prompt to offer.
-  const installed =
-    window.matchMedia?.("(display-mode: standalone)").matches ||
-    window.navigator.standalone === true;
-  let deferred = null;
-  if (!installed) {
-    window.addEventListener("beforeinstallprompt", (e) => {
-      e.preventDefault(); // suppress the default mini-infobar; the pill drives install
-      deferred = e;
-      btn.hidden = false;
-    });
+const INSTALL_NAG_SNOOZE_DAYS = 30;
+let _deferredInstall = null;
+
+// iOS/iPadOS: no install prompt exists, so the copy has to name the share button.
+// iPadOS 13+ reports a Macintosh UA, hence the touch-point check.
+function isIosLike() {
+  const ua = navigator.userAgent;
+  return /iPad|iPhone|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+}
+
+// Dismissal is a snooze, not a mute: offline access is worth re-raising for an audience
+// that loses signal underground, but a user who said "not now" gets a month of quiet.
+function installNagSnoozed() {
+  const at = loadPrefs().install_nag_dismissed_at;
+  if (!at) return false;
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) return false;
+  return Date.now() - ms < INSTALL_NAG_SNOOZE_DAYS * 86400e3;
+}
+
+function snoozeInstallNag() {
+  const prefs = loadPrefs();
+  prefs.install_nag_dismissed_at = new Date().toISOString();
+  savePrefs(prefs);
+}
+
+async function promptInstall() {
+  if (!_deferredInstall) return;
+  const e = _deferredInstall;
+  _deferredInstall = null; // a captured prompt can only be used once
+  renderInstallUi();
+  e.prompt();
+  try { await e.userChoice; } catch (_) {}
+}
+
+/* Single decision point for both surfaces. Safe to call any number of times. */
+function renderInstallUi() {
+  const pill = document.getElementById("install-app");
+  const banner = document.getElementById("install-banner");
+  const text = document.getElementById("install-banner-text");
+  const cta = document.getElementById("install-banner-cta");
+  if (!pill || !banner || !text || !cta) return;
+
+  // Running installed → nothing to offer. Demo builds are a static GitHub Pages mirror,
+  // so installing one would pin the user to sample data rather than the real app.
+  const canOffer = !isInstalledDisplay() && !DEMO_MODE;
+  const showBanner = canOffer && !installNagSnoozed();
+
+  if (showBanner) {
+    if (_deferredInstall) {
+      text.innerHTML =
+        "Install UpstreamWX for full-screen use and offline access to your last briefing.";
+      cta.hidden = false;
+    } else if (isIosLike()) {
+      text.innerHTML =
+        `Add UpstreamWX to your Home Screen for full-screen use and offline access — tap ` +
+        `${icon("share_ios", "install-banner__glyph")} then <b>Add to Home Screen</b>.`;
+      cta.hidden = true;
+    } else {
+      text.innerHTML =
+        "Add UpstreamWX to your Home Screen from your browser menu for full-screen use " +
+        "and offline access.";
+      cta.hidden = true;
+    }
   }
-  btn.addEventListener("click", async () => {
-    if (!deferred) return;
-    btn.hidden = true; // a captured prompt can only be used once
-    deferred.prompt();
-    try { await deferred.userChoice; } catch (_) {}
-    deferred = null;
+  banner.hidden = !showBanner;
+  // Never two CTAs for the same action: the pill fills in once the banner is gone.
+  pill.hidden = !(canOffer && !showBanner && _deferredInstall);
+}
+
+function initInstallPrompt() {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault(); // suppress the default mini-infobar; our surfaces drive install
+    _deferredInstall = e;
+    renderInstallUi();
   });
   window.addEventListener("appinstalled", () => {
-    deferred = null;
-    btn.hidden = true;
+    _deferredInstall = null;
+    renderInstallUi(); // initDisplayMode's own listener re-stamps the attribute
   });
+  document.getElementById("install-app")?.addEventListener("click", promptInstall);
+  document.getElementById("install-banner-cta")?.addEventListener("click", promptInstall);
+  document.getElementById("install-banner-close")?.addEventListener("click", () => {
+    snoozeInstallNag();
+    renderInstallUi();
+  });
+  renderInstallUi();
 }
 
 /* ── Bootstrap ─────────────────────────────────────────────────────── */
@@ -3298,6 +3410,9 @@ async function main() {
     if (cfg?.tier_labels) Object.assign(TIER_LABELS, cfg.tier_labels);
     if (cfg?.heat_labels) Object.assign(TIER_LABELS, cfg.heat_labels);
   } catch (_) { /* keep identity defaults */ }
+  // Stamp <html data-display-mode> before the first render so CSS keyed off it never
+  // flashes, and re-run the install surfaces whenever the mode changes.
+  initDisplayMode(renderInstallUi);
   renderTabs();
   initHeaderScrollShadow();
   renderLoadingState();

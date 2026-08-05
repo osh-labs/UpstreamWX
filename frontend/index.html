@@ -50,6 +50,16 @@
       <button class="busy-banner__btn" id="busy-retry" type="button">Retry</button>
     </div>
     <div class="app">
+      <!-- Add-to-Home-Screen nag. In normal flow (not fixed) as the first child of .app,
+           so it pushes the header down instead of covering it. Shown only in a browser
+           tab, never in the installed PWA; dismissal persists in uwx.prefs.v1. app.js
+           fills the text, which differs by platform — on iOS the install can only be
+           described, never triggered (no API opens Safari's share menu). -->
+      <div class="install-banner" id="install-banner" hidden role="region" aria-label="Install UpstreamWX">
+        <p class="install-banner__text" id="install-banner-text"></p>
+        <button class="install-banner__cta" id="install-banner-cta" type="button" hidden>Install</button>
+        <button class="install-banner__close" id="install-banner-close" type="button" aria-label="Dismiss install reminder">&times;</button>
+      </div>
       <header class="app-header" id="header"></header>
       <nav class="tab-bar" id="tabs" role="tablist" aria-label="Briefing views"></nav>
 
