@@ -863,14 +863,16 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   cursor: pointer;
 }
 
-/* Layer-switcher control: stacked text buttons, active entry highlighted. */
-.map-layer-switcher { display: flex; flex-direction: column; min-width: 72px; }
+/* Layer-switcher control: stacked text buttons, active entry highlighted. The explicit
+   line-height keeps the four-item stack short enough to clear a small planner map. */
+.map-layer-switcher { display: flex; flex-direction: column; min-width: 68px; }
 .map-layer-switcher button {
-  display: block; width: 100%; padding: 5px 10px;
+  display: block; width: 100%; padding: 4px 8px;
   border: none; border-radius: 0;
   background: var(--color-surface) !important;
   color: var(--color-text-muted) !important;
   font-family: var(--font-sans); font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   text-align: left; cursor: pointer;
 }
 .map-layer-switcher button:hover { color: var(--color-text) !important; }
@@ -1275,7 +1277,10 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   overflow: hidden;
-  padding-bottom: env(safe-area-inset-bottom);
+  /* All four insets: full-bleed at 100dvh, the sheet otherwise runs under the status bar
+     when installed to the Home Screen, and under the notch in landscape. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 @media (min-width: 768px) {
   .mp-sheet {
@@ -1284,11 +1289,22 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
     box-shadow: var(--shadow-pop);
   }
 }
+/* Scrollable middle. The map is the only flexible row, so it absorbs whatever the
+   trimmed chrome leaves; when even the minimums don't fit (short viewport, or the
+   time fields stacked) this scrolls rather than collapsing the map. */
+.mp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .mp-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--color-border);
 }
 .mp-bar__title { margin: 0; font-size: var(--text-h2); }
@@ -1301,11 +1317,11 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   padding: var(--space-1);
   cursor: pointer;
 }
-.mp-search { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4) var(--space-2); }
+.mp-search { display: flex; gap: var(--space-2); padding: var(--space-2) var(--space-4); }
 .mp-search__input {
   flex: 1;
   min-width: 0;
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-3);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -1313,7 +1329,8 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   font-size: 16px; /* ≥16px suppresses iOS auto-zoom on focus */
 }
 .mp-search__go {
-  padding: var(--space-2) var(--space-3);
+  flex: none;
+  padding: 7px var(--space-3);
   background: var(--color-brand-dim);
   color: var(--color-brand);
   border: 1px solid transparent;
@@ -1325,12 +1342,18 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   min-height: var(--lh-caption);
   padding: 0 var(--space-4);
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
+/* Reserve no vertical space until there is actually a message to show — on a small
+   phone that row is pure map height. */
+.mp-search__status:empty { display: none; }
 .mp-search__status.is-error { color: var(--color-warn); }
 .mp-map {
   flex: 1;
-  min-height: 0;
+  /* Floor the map so a short viewport scrolls the body instead of squeezing the map
+     down to a sliver (it was ~120 pt on a 393 pt iPhone in Safari). */
+  min-height: 180px;
   /* Override the global `.maplibregl-map { width: 100% }` rule: on this element the
    * horizontal margins would otherwise stack on top of a full-parent-width box and push
    * the map past the sheet's right edge (issue #117). `auto` lets the flex cross-axis
@@ -1344,52 +1367,89 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .mp-hint {
   margin: 0;
-  padding: var(--space-2) var(--space-4) 0;
+  padding: 6px var(--space-4) 0;
   font-size: var(--text-caption);
   line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 .mp-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2) var(--space-3);
-  padding: var(--space-3) var(--space-4) 0;
-}
-.mp-fields label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+.mp-fields__row {
+  display: grid;
+  /* minmax(0, …) — without it a grid track is floored at its item's min-content width,
+     and a datetime-local's is wide enough to push the field past the sheet's edge. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+.mp-fields__row--time { grid-template-columns: minmax(0, 1fr); }
+/* Wide enough for the sheet to give each time field a column that fits the full
+   locale-formatted value — pair them back up. */
+@media (min-width: 560px) {
+  .mp-fields__row--time { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.mp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-secondary);
 }
+/* Wide enough for the longest label ("Activity"), so the select and both time inputs
+   share one left edge. */
+.mp-field__label { flex: none; min-width: 40px; }
 .mp-fields select,
 .mp-fields input[type="datetime-local"] {
-  padding: var(--space-2) var(--space-3);
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 7px var(--space-2);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   color: var(--color-text);
   font-size: 16px; /* ≥16px suppresses iOS auto-zoom on focus */
 }
-.mp-fields__check { flex-direction: row; align-items: center; gap: var(--space-2); }
-.mp-fields__check input { width: auto; }
+.mp-fields__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
+.mp-fields__check input { width: auto; flex: none; }
 
 /* Radius of Concern (FR-3): discrete, non-linear slider above the actions. */
-.mp-roc { padding: var(--space-3) var(--space-4) 0; }
+.mp-roc { padding: var(--space-2) var(--space-4) 0; }
 .mp-roc__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
 }
-.mp-roc__label { font-size: var(--text-caption); color: var(--color-text-secondary); }
+/* Explicit caption line-heights throughout the sheet: these spans would otherwise
+   inherit the 22 px body leading around 11 px text and pad every row by ~6 px. */
+.mp-roc__label {
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
 .mp-roc__value {
   font-size: var(--text-label);
+  line-height: var(--lh-caption);
   font-weight: 600;
   color: var(--sev-high);
 }
 .mp-roc__slider {
   width: 100%;
-  margin: var(--space-2) 0 4px;
+  margin: 6px 0 2px;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
@@ -1427,23 +1487,42 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   display: flex;
   justify-content: space-between;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 .mp-roc__hint {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: var(--text-caption);
   line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 
-.mp-actions { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+/* Pinned action bar. 10 px padding on --text-body keeps both buttons at the 44 pt iOS
+   touch minimum while giving the map back the height the old 12 px pair spent. */
+.mp-actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
 .mp-actions .btn-ghost,
-.mp-actions .btn-primary { flex: 1; margin: 0; }
+.mp-actions .btn-primary { flex: 1; margin: 0; padding: 10px var(--space-2); }
+/* Transparent border so the ghost button's 1 px outline doesn't make it the taller of
+   the pair. */
+.mp-actions .btn-primary { border: 1px solid transparent; }
 
 /* Settings modal — reuses the mp-sheet/mp-roc chrome; the LAoC slider is yellow to match
    its map ring (distinct from the orange RoC/phase sliders). Yellow is scoped by ID so the
    approach/egress sliders remain orange. */
-.settings-body { padding-bottom: var(--space-2); }
+/* Scrolls for the same reason .mp-body does: four slider blocks overflow a short phone. */
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--space-2);
+}
 
 /* US/metric segmented toggle — two equal-width buttons; the active one carries the brand
    fill. Styled off aria-checked so the a11y state and the visual state can never drift. */
@@ -1480,17 +1559,18 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 
 /* Mission name field — sits above the search bar, separated by a thin rule. */
 .mp-name-field {
-  padding: var(--space-3) var(--space-4) var(--space-2);
+  padding: var(--space-2) var(--space-4);
 }
 .mp-name-field__label {
   display: block;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .mp-name-field__input {
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-3);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);

@@ -106,64 +106,85 @@
           <h2 id="mp-title" class="mp-bar__title">Plan expedition</h2>
           <button class="mp-bar__close" id="mp-cancel" type="button" aria-label="Close">&times;</button>
         </header>
-        <div class="mp-name-field">
-          <label class="mp-name-field__label" for="mp-name">Expedition name</label>
-          <input
-            id="mp-name"
-            class="mp-name-field__input"
-            type="text"
-            placeholder="Name your expedition"
-            autocomplete="off"
-            maxlength="80"
-          />
-        </div>
-        <hr class="mp-divider" />
-        <form class="mp-search" id="mp-search-form" role="search">
-          <input
-            id="mp-search-input"
-            class="mp-search__input"
-            type="text"
-            placeholder="Address or coordinates (e.g. 37.0192, -111.9889)"
-            autocomplete="off"
-            aria-label="Search address or coordinates"
-          />
-          <button class="mp-search__go" type="submit">Search</button>
-        </form>
-        <div id="mp-search-status" class="mp-search__status" aria-live="polite"></div>
-        <div id="mp-map" class="mp-map"></div>
-        <p class="mp-hint">
-          Long-press the map to drop a point, or drag the marker to reposition. Search &copy; OpenStreetMap contributors.
-        </p>
-        <div class="mp-fields">
-          <label>Activity
-            <select id="mp-activity">
-              <option value="canyon">Canyon</option>
-              <option value="cave">Cave</option>
-            </select>
-          </label>
-          <label class="mp-fields__check"><input id="mp-slot" type="checkbox" /> Slot canyon</label>
-          <label>Start<input id="mp-start" type="datetime-local" /></label>
-          <label>End<input id="mp-end" type="datetime-local" /></label>
-        </div>
-        <div class="mp-roc">
-          <div class="mp-roc__head">
-            <span class="mp-roc__label">Radius of Concern</span>
-            <span class="mp-roc__value" id="mp-radius-value">20 mi</span>
+        <!-- Scrollable body: the map flexes into whatever height the trimmed chrome leaves,
+             and on a short viewport (a 393 pt iPhone in Safari) the body scrolls instead of
+             crushing the map to nothing. The bar and the actions stay pinned. -->
+        <div class="mp-body">
+          <div class="mp-name-field">
+            <label class="mp-name-field__label" for="mp-name">Expedition name</label>
+            <input
+              id="mp-name"
+              class="mp-name-field__input"
+              type="text"
+              placeholder="Name your expedition"
+              autocomplete="off"
+              maxlength="80"
+            />
           </div>
-          <input
-            id="mp-radius"
-            class="mp-roc__slider"
-            type="range"
-            min="0"
-            max="4"
-            step="1"
-            value="1"
-            aria-label="Radius of Concern (miles)"
-          />
-          <div class="mp-roc__ticks" id="mp-radius-ticks" aria-hidden="true">
-            <span>10</span><span>20</span><span>50</span><span>100</span><span>200</span>
+          <hr class="mp-divider" />
+          <form class="mp-search" id="mp-search-form" role="search">
+            <input
+              id="mp-search-input"
+              class="mp-search__input"
+              type="text"
+              placeholder="Address or coordinates (e.g. 37.0192, -111.9889)"
+              autocomplete="off"
+              aria-label="Search address or coordinates"
+            />
+            <button class="mp-search__go" type="submit">Search</button>
+          </form>
+          <div id="mp-search-status" class="mp-search__status" aria-live="polite"></div>
+          <div id="mp-map" class="mp-map"></div>
+          <p class="mp-hint">
+            Long-press the map to drop a point, or drag the marker to reposition. Search &copy; OpenStreetMap contributors.
+          </p>
+          <!-- Labels sit beside their control rather than above it: the same fields in
+               roughly half the height, which is what the map gets back. -->
+          <div class="mp-fields">
+            <div class="mp-fields__row">
+              <label class="mp-field">
+                <span class="mp-field__label">Activity</span>
+                <select id="mp-activity">
+                  <option value="canyon">Canyon</option>
+                  <option value="cave">Cave</option>
+                </select>
+              </label>
+              <label class="mp-fields__check"><input id="mp-slot" type="checkbox" /> Slot canyon</label>
+            </div>
+            <!-- One per full-width row: a datetime-local renders locale-formatted text
+                 ("Aug 6, 2026 at 22:00") that does not fit a half-width column on a
+                 393 pt iPhone — that overflow is what hung off the screen edge. -->
+            <div class="mp-fields__row mp-fields__row--time">
+              <label class="mp-field">
+                <span class="mp-field__label">Start</span>
+                <input id="mp-start" type="datetime-local" />
+              </label>
+              <label class="mp-field">
+                <span class="mp-field__label">End</span>
+                <input id="mp-end" type="datetime-local" />
+              </label>
+            </div>
           </div>
-          <p class="mp-roc__hint">Caps the upstream watershed — the basin is clipped to this radius before weather data is gathered.</p>
+          <div class="mp-roc">
+            <div class="mp-roc__head">
+              <span class="mp-roc__label">Radius of Concern</span>
+              <span class="mp-roc__value" id="mp-radius-value">20 mi</span>
+            </div>
+            <input
+              id="mp-radius"
+              class="mp-roc__slider"
+              type="range"
+              min="0"
+              max="4"
+              step="1"
+              value="1"
+              aria-label="Radius of Concern (miles)"
+            />
+            <div class="mp-roc__ticks" id="mp-radius-ticks" aria-hidden="true">
+              <span>10</span><span>20</span><span>50</span><span>100</span><span>200</span>
+            </div>
+            <p class="mp-roc__hint">Caps the upstream watershed — the basin is clipped to this radius before weather data is gathered.</p>
+          </div>
         </div>
         <footer class="mp-actions">
           <button id="mp-gps" class="btn-ghost" type="button">Use current location</button>
