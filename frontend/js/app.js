@@ -3330,12 +3330,15 @@ function renderInstallUi() {
     if (_deferredInstall) {
       text.innerHTML =
         "Install UpstreamWX for full-screen use and offline access to your last briefing.";
+      cta.textContent = "Install";
       cta.hidden = false;
     } else if (isIosLike()) {
+      // No prompt to fire, so the CTA opens the walkthrough instead of installing.
       text.innerHTML =
-        `Add UpstreamWX to your Home Screen for full-screen use and offline access — tap ` +
-        `${icon("share_ios", "install-banner__glyph")} then <b>Add to Home Screen</b>.`;
-      cta.hidden = true;
+        `Add UpstreamWX to your Home Screen ${icon("share_ios", "install-banner__glyph")} ` +
+        "for full-screen use and offline access.";
+      cta.textContent = "Show me how";
+      cta.hidden = false;
     } else {
       text.innerHTML =
         "Add UpstreamWX to your Home Screen from your browser menu for full-screen use " +
@@ -3344,8 +3347,145 @@ function renderInstallUi() {
     }
   }
   banner.hidden = !showBanner;
-  // Never two CTAs for the same action: the pill fills in once the banner is gone.
-  pill.hidden = !(canOffer && !showBanner && _deferredInstall);
+  // Never two CTAs for the same action: the pill fills in once the banner is gone. On iOS
+  // it stays available permanently, so the walkthrough survives snoozing the banner.
+  pill.hidden = !(canOffer && !showBanner && (_deferredInstall || isIosLike()));
+}
+
+// The banner CTA and the status pill share one action, which differs by platform:
+// Chromium fires the captured prompt, iOS opens the walkthrough.
+function installAction() {
+  if (_deferredInstall) return promptInstall();
+  if (isIosLike()) openIosGuide();
+  return Promise.resolve();
+}
+
+/* ── iOS walkthrough carousel ──────────────────────────────────────────
+ * Three screenshots the user swipes through. The track is a scroll-snap container, so
+ * the horizontal swipe IS native scrolling — momentum, rubber-banding and trackpad
+ * gestures come for free, and there are no touch handlers to fight the browser with.
+ * The dots and the arrow just drive scrollLeft; a scroll listener reads the index back,
+ * so pointer, keyboard and programmatic movement all stay in sync through one path. */
+const IOS_GUIDE_SLIDES = 3;
+let _iosGuideMoved = false; // first user move silences the nudge animation
+
+function iosGuideEls() {
+  return {
+    modal: document.getElementById("ios-guide"),
+    track: document.getElementById("ios-guide-track"),
+    dots: document.getElementById("ios-guide-dots"),
+    next: document.getElementById("ios-guide-next"),
+  };
+}
+
+function iosGuideIndex(track) {
+  if (!track || !track.clientWidth) return 0;
+  const i = Math.round(track.scrollLeft / track.clientWidth);
+  return Math.max(0, Math.min(IOS_GUIDE_SLIDES - 1, i));
+}
+
+function goToIosSlide(i, { smooth = true } = {}) {
+  const { track } = iosGuideEls();
+  if (!track) return;
+  const clamped = Math.max(0, Math.min(IOS_GUIDE_SLIDES - 1, i));
+  track.scrollTo({ left: clamped * track.clientWidth, behavior: smooth ? "smooth" : "auto" });
+}
+
+// Reflect the live scroll position into the dots and the nudge arrow.
+function syncIosGuide() {
+  const { track, dots, next } = iosGuideEls();
+  if (!track || !dots || !next) return;
+  const i = iosGuideIndex(track);
+  [...dots.children].forEach((dot, n) => {
+    dot.classList.toggle("is-active", n === i);
+    if (n === i) dot.setAttribute("aria-current", "true");
+    else dot.removeAttribute("aria-current");
+  });
+  // Nothing left to nudge toward on the last slide.
+  next.hidden = i >= IOS_GUIDE_SLIDES - 1;
+  next.classList.toggle("is-quiet", _iosGuideMoved);
+}
+
+/* The slides carry `data-src`, not `src`, so the screenshots are fetched the first time
+ * the card is opened rather than on every page load — most visitors (and every non-iOS
+ * one) never see this card, and the files are the heaviest assets in the app. It also
+ * means the error listener is attached before the load starts, so a missing file can
+ * never slip past it; the `complete`-with-zero-width test then only has to cover a
+ * reopen after an earlier failure. */
+function hideMissingIosShots() {
+  for (const img of document.querySelectorAll(".ios-guide__shot")) {
+    if (img.dataset.src && !img.getAttribute("src")) img.src = img.dataset.src;
+    if (img.complete && img.naturalWidth === 0) img.hidden = true;
+  }
+}
+
+function openIosGuide() {
+  const { modal, track, next } = iosGuideEls();
+  if (!modal || !track) return;
+  _iosGuideMoved = false;
+  modal.hidden = false;
+  hideMissingIosShots();
+  if (next) next.innerHTML = icon("chevron_right", "ios-guide__next-glyph");
+  // Start at slide 1 without animating in from wherever a previous open left it.
+  goToIosSlide(0, { smooth: false });
+  syncIosGuide();
+  document.getElementById("ios-guide-close")?.focus();
+}
+
+function closeIosGuide() {
+  const { modal } = iosGuideEls();
+  if (modal) modal.hidden = true;
+}
+
+function initIosGuide() {
+  const { modal, track, dots, next } = iosGuideEls();
+  if (!modal || !track || !dots || !next) return;
+
+  for (let i = 0; i < IOS_GUIDE_SLIDES; i++) {
+    const dot = document.createElement("button");
+    dot.type = "button";
+    dot.className = "ios-guide__dot";
+    dot.setAttribute("aria-label", `Step ${i + 1} of ${IOS_GUIDE_SLIDES}`);
+    dot.addEventListener("click", () => { _iosGuideMoved = true; goToIosSlide(i); });
+    dots.appendChild(dot);
+  }
+
+  // A screenshot that hasn't landed yet must not render as a broken-image icon; the
+  // caption alone still reads as a usable instruction (see img/install/README.md).
+  for (const img of track.querySelectorAll(".ios-guide__shot")) {
+    img.addEventListener("error", () => { img.hidden = true; });
+  }
+
+  // rAF-coalesced: scroll fires far more often than the dots need repainting.
+  let queued = false;
+  track.addEventListener("scroll", () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; syncIosGuide(); });
+  }, { passive: true });
+
+  next.addEventListener("click", () => {
+    _iosGuideMoved = true;
+    goToIosSlide(iosGuideIndex(track) + 1);
+  });
+  track.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+    e.preventDefault();
+    _iosGuideMoved = true;
+    goToIosSlide(iosGuideIndex(track) + (e.key === "ArrowRight" ? 1 : -1));
+  });
+  // A swipe is a scroll, so the first one silences the nudge the same as a tap.
+  track.addEventListener("pointerdown", () => { _iosGuideMoved = true; });
+
+  document.getElementById("ios-guide-close")?.addEventListener("click", closeIosGuide);
+  modal.addEventListener("click", (e) => { if (e.target === e.currentTarget) closeIosGuide(); });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !modal.hidden) closeIosGuide();
+  });
+  // The slides are sized in %, so a rotation changes scrollLeft's meaning — re-anchor.
+  window.addEventListener("resize", () => {
+    if (!modal.hidden) goToIosSlide(iosGuideIndex(track), { smooth: false });
+  });
 }
 
 function initInstallPrompt() {
@@ -3358,12 +3498,13 @@ function initInstallPrompt() {
     _deferredInstall = null;
     renderInstallUi(); // initDisplayMode's own listener re-stamps the attribute
   });
-  document.getElementById("install-app")?.addEventListener("click", promptInstall);
-  document.getElementById("install-banner-cta")?.addEventListener("click", promptInstall);
+  document.getElementById("install-app")?.addEventListener("click", installAction);
+  document.getElementById("install-banner-cta")?.addEventListener("click", installAction);
   document.getElementById("install-banner-close")?.addEventListener("click", () => {
     snoozeInstallNag();
     renderInstallUi();
   });
+  initIosGuide();
   renderInstallUi();
 }
 

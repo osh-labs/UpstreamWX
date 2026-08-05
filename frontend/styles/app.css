@@ -1620,6 +1620,171 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 #settings-laoc::-moz-range-thumb { background: #facc15; }
 #settings-laoc:focus-visible { outline-color: #facc15; }
 
+/* ── 7.17 iOS Add-to-Home-Screen walkthrough ───────────────────────────
+ * Safari's share menu can't be opened from script, so the install is demonstrated.
+ * The carousel is a scroll-snap track: the horizontal swipe is native scrolling, which
+ * is why there are no touch handlers here — only snap points and a hidden scrollbar. */
+.ios-guide {
+  position: fixed;
+  inset: 0;
+  z-index: 120; /* above the planner/settings sheets (110) — it can be opened from them */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px))
+           max(var(--space-4), env(safe-area-inset-right, 0px))
+           max(var(--space-4), env(safe-area-inset-bottom, 0px))
+           max(var(--space-4), env(safe-area-inset-left, 0px));
+  background: rgba(4, 6, 10, 0.88);
+}
+.ios-guide[hidden] { display: none; }
+.ios-guide__card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 420px;
+  /* "Most of the screen": as tall as the padded overlay allows, capped so it never
+     becomes a letterboxed slab on a tablet. */
+  height: 100%;
+  max-height: 720px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.ios-guide__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+.ios-guide__title { margin: 0; font-size: var(--text-h2); }
+
+/* Positioning context for the nudge arrow, and the flex row that the track fills. */
+.ios-guide__viewport { position: relative; flex: 1; min-height: 0; }
+.ios-guide__track {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain; /* a swipe past the last slide must not navigate back */
+  scrollbar-width: none;
+}
+.ios-guide__track::-webkit-scrollbar { display: none; }
+.ios-guide__track:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+.ios-guide__slide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  scroll-snap-stop: always; /* one swipe = one step, never skip past a step */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Centres the caption when its screenshot is missing; a present screenshot is
+     flex: 1 and fills the slide, so this is a no-op in the normal case. */
+  justify-content: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+.ios-guide__shot {
+  flex: 1;
+  min-height: 0;
+  max-width: 100%;
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+.ios-guide__shot[hidden] { display: none; }
+.ios-guide__cap {
+  flex: none;
+  text-align: center;
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+  color: var(--color-text-secondary);
+}
+.ios-guide__cap b { color: var(--color-text); font-weight: 650; }
+.ios-guide__step {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  font-weight: 650;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-brand);
+}
+
+/* Swipe nudge. Pulses until the user moves the carousel (JS adds .is-quiet), and is
+   hidden outright on the last slide — by then there is nothing to nudge toward. */
+.ios-guide__next {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-overlay);
+  color: var(--color-brand);
+  cursor: pointer;
+}
+.ios-guide__next[hidden] { display: none; }
+.ios-guide__next-glyph { width: 22px; height: 22px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ios-guide__next { animation: uwx-swipe-nudge 1.9s var(--ease) infinite; }
+  /* Keep the translateY centring inside the keyframes — transform is not additive. */
+  @keyframes uwx-swipe-nudge {
+    0%, 100% { transform: translate(0, -50%); opacity: 0.6; }
+    50%      { transform: translate(5px, -50%); opacity: 1; }
+  }
+  .ios-guide__next.is-quiet { animation: none; opacity: 0.75; }
+}
+
+.ios-guide__dots {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+.ios-guide__dot {
+  /* 8px dot in a 24px hit box — the dot is decorative-sized, the target is not. */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ios-guide__dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.ios-guide__dot.is-active::before { background: var(--color-brand); transform: scale(1.25); }
+@media (prefers-reduced-motion: reduce) {
+  .ios-guide__dot::before { transition: none; }
+}
+
 /* Mission name field — sits above the search bar, separated by a thin rule. */
 .mp-name-field {
   padding: var(--space-2) var(--space-4);

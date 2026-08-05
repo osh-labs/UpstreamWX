@@ -41,6 +41,7 @@ const PATHS = {
   // iOS Safari's share glyph (box with an arrow out the top) — shown inline in the
   // install banner, which has to point at the toolbar button by sight: "Add to Home
   // Screen" cannot be opened from script.
+  chevron_right: '<path d="M9 5l7 7-7 7"/>',
   share_ios:
     '<path d="M12 3v12"/><path d="M8.5 6.5L12 3l3.5 3.5"/><path d="M6 11H5a1 1 0 00-1 1v8a1 1 0 001 1h14a1 1 0 001-1v-8a1 1 0 00-1-1h-1"/>',
 };
