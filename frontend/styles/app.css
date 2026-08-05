@@ -1643,10 +1643,13 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   flex-direction: column;
   width: 100%;
   max-width: 420px;
-  /* "Most of the screen": as tall as the padded overlay allows, capped so it never
-     becomes a letterboxed slab on a tablet. */
-  height: 100%;
-  max-height: 720px;
+  /* Height follows the content rather than filling the overlay: the screenshots are
+     square, so a fixed-height card would pad ~150 px of dead space above and below an
+     image whose width is already the binding constraint. The slides live in one flex
+     row, so the track is as tall as the tallest of them and the card does not resize
+     as you swipe. max-height is the backstop for a short (landscape) viewport. */
+  height: auto;
+  max-height: 100%;
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-lg);
@@ -1664,7 +1667,7 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 .ios-guide__title { margin: 0; font-size: var(--text-h2); }
 
 /* Positioning context for the nudge arrow, and the flex row that the track fills. */
-.ios-guide__viewport { position: relative; flex: 1; min-height: 0; }
+.ios-guide__viewport { position: relative; flex: 0 1 auto; min-height: 0; }
 .ios-guide__track {
   display: flex;
   height: 100%;
@@ -1691,10 +1694,20 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   padding: var(--space-3) var(--space-4);
   min-width: 0;
 }
+/* Intrinsic sizing capped by the box — correct for any aspect, not just the square
+   crops in use, and it never stretches a small image up to fill. On a phone the width
+   is what binds; max-height only comes into play when the card hits its own cap. */
 .ios-guide__shot {
-  flex: 1;
+  flex: 0 1 auto;
   min-height: 0;
+  width: auto;
+  height: auto;
   max-width: 100%;
+  /* Not `max-height: 100%` — the card is auto-height, so a percentage here resolves
+     against an indefinite height and never binds (the image then overflows a short
+     landscape viewport). Subtract the card's own chrome from the viewport instead:
+     ~196 px of header + caption + dots + padding, plus the 32 px overlay margin. */
+  max-height: calc(100dvh - 230px);
   object-fit: contain;
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border);

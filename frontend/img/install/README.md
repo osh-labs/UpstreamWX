@@ -13,11 +13,15 @@ exactly these names:
 ## Spec
 
 - **Format** PNG (screenshots have hard UI edges; JPEG artifacts them).
-- **Aspect** portrait phone, roughly 9:19.5. The slide scales the image with
-  `object-fit: contain`, so any portrait aspect renders correctly — it just
-  leaves more letterboxing the further it strays.
-- **Width** 750–900 px is plenty. The slide is at most ~400 CSS px wide, so a
-  full 1179 px device capture is wasted bytes; downscale before committing.
+- **Aspect** square (1:1), cropped to the relevant part of the screen. The card
+  is laid out for it: it sizes to its content, so the image width binds and the
+  caption sits directly beneath with no dead space. Sizing is intrinsic
+  (`object-fit: contain`), so a different aspect still renders correctly — it
+  just leaves letterboxing, and a tall crop makes the card taller.
+- **Width** 800–900 px square. The slide is at most ~390 CSS px wide, so ~800 px
+  covers 2× displays with margin; a full device capture is wasted bytes.
+- **Consistency** keep all three the same dimensions. The slides share one flex
+  row, so the card is as tall as the tallest — a mismatched crop pads the others.
 - **Weight** aim for ≤150 KB each. They are lazy: the slides carry `data-src`,
   not `src`, so nothing is fetched until the card is opened for the first time
   — a visitor who never opens it (and every non-iOS visitor) pays zero. They are
