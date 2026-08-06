@@ -98,6 +98,7 @@ tests/                   hermetic suite + committed fixtures + validation corpus
 frontend/                static PWA (M0.4); fetches POST /v1/briefing; STYLE_GUIDE.md is the visual source of truth
   data/sample-briefing.json  the frozen structured contract; rendered ONLY in demo mode (GitHub Pages host or ?demo) — production never falls back to it
   pdf/briefing-pdf.html      print-optimized PDF export template (FR-27); rendered server-side by sitrep/pdf.py via headless Chromium; client falls back to localStorage + ?print=1 when offline
+  img/install/               annotated iOS Add-to-Home-Screen screenshots for the install carousel (spec + naming in its README); lazy via data-src, deliberately NOT in the sw.js precache
 docs/m0.0../m0.4/        per-milestone findings + spike reports — read these for "why"
 .claude/hooks/           SessionStart hook that installs deps in the web environment
 ```

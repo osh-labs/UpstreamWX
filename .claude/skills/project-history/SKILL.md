@@ -75,6 +75,11 @@ subset is cached (`validate_grib2_bytes`) so a truncated publish degrades one me
   (upstream routing lag, §16.1); the engine never reads the display series.
 - Unit localization (US customary / metric) — conversion is display-only; engine, thresholds,
   and all `HazardInputs` stay in native units.
+- `docs/changelog-2026-08-06-planner-layout-install-flow.md` — narrow-phone mission-planner
+  layout fix and the Add-to-Home-Screen flow. Two facts that get re-broken: a `1fr` grid track
+  floors at its item's min-content width, and a `datetime-local`'s is wide enough to push a field
+  off-screen (hence `minmax(0, …)` + `min-width: 0`); and **no API can open Safari's share menu**,
+  so the iOS install is demonstrated, never triggered — `navigator.share()` is not a substitute.
 - Domain split: app at `app.upstreamwx.com`, static landing from `landing/` at the apex;
   nginx blocks are `deploy/nginx/upstreamwx.conf` and `landing.conf`.
 - `docs/font-vendoring-provenance.md` — vendored font licensing.
