@@ -1716,6 +1716,10 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 .ios-guide__shot[hidden] { display: none; }
 .ios-guide__cap {
   flex: none;
+  /* Reserve the step label plus two lines on every slide. The slides are centred, so a
+     caption that wraps where its neighbours don't would sit its screenshot ~11 px higher
+     — visible as a jiggle mid-swipe. Sized from the tokens, not a magic number. */
+  min-height: calc(var(--lh-caption) + 2px + 2 * var(--lh-body));
   text-align: center;
   font-size: var(--text-body);
   line-height: var(--lh-body);
