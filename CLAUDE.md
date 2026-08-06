@@ -223,394 +223,55 @@ CAPE×precip member-exceedance **proxy** (`gefs_p_tstm`); REFS `LTNG` drives it 
 
 ## Milestone status (as of this writing)
 
-**Ensemble EOL transition (SREF+HREF → GEFS+REFS).** NWS SCN 26-47 retires SREF **and**
-HREF on 2026-08-31. The ensemble spine was migrated to the durable replacements: **GEFS**
-(global, per-member; the provider computes member-exceedance in-house since GEFS ships no
-probability product, with member fetches fanned across a thread pool) replaces SREF, and
-**REFS** (3 km RRFS Ensemble, AWS `rrfs_a` enspost NEP) replaces HREF. The orchestrator runs
-`gefs_provider` + `refs_provider`; REFS is authoritative in-window (tier *and* confidence),
-GEFS the coarse backstop beyond range; lightning uses REFS `LTNG` in-window and a GEFS
-CAPE×precip proxy beyond. Bundle/engine/threshold fields are `gefs_*`/`refs_*`; cadence is
-00/06/12/18Z. The new feeds were de-risked live first (spikes E/F, docs/m0.0). The `sref/` and
-`href/` packages remain only for those spikes (post-cutover cleanup deletes them). Cut points
-are carried over as a seeded baseline pending field calibration to the new ensembles.
+**Built and validated:** **M0.0** (de-risk spikes A/B/C/D resolved YES), **M0.1** (engine +
+thresholds + corpus + watershed + ingest), **M0.2** (CLI → `.md` SITREP + Haiku framing),
+**M0.3** (FastAPI service, cache, cycle math, shared generation core), **M0.4** (PWA wired to
+the live API — mission planner, watershed + RoC/LAoC rendering, structured contract, PDF export
+FR-27). **M0.5** (PWA polish — offline cache timestamp UX FR-26/41, timeline) is in progress;
+`frontend/STYLE_GUIDE.md` is the visual source of truth.
 
-Built and validated: **M0.0** (de-risk spikes A/B/C/D resolved YES), **M0.1**
-(engine + thresholds + corpus + watershed + ingest), **M0.2** (CLI → `.md` SITREP +
-Haiku framing), **M0.3** (FastAPI service, cache, cycle math, shared generation core),
-**M0.4** (PWA wired to the live API — see below).
+**Deferred to M0.1.1** (requires the always-on EC2 host; cannot be validated in an ephemeral
+container): the recurring GEFS/REFS scheduler **cadence** and the **cross-restart persistent
+cache**. The host-independent cores (on-demand GEFS/REFS processing, cache semantics, cycle
+arithmetic, a single refresh pass) are built and tested.
 
-**M0.4** (PWA: map point in → SITREP out). The API now emits the full structured briefing
-the PWA renders its five views from (`sitrep/structured.py`, the API analogue of
-`render.py`; the contract is `frontend/data/sample-briefing.json`) and serves the PWA
-single-origin (`app.py` `StaticFiles` mount, `UPSTREAMWX_FRONTEND_DIR` to override). The
-frontend POSTs `/v1/briefing`; dropping/moving the point or editing the mission re-fetches
-live, the upstream watershed re-traces and renders (FR-1, FR-33, FR-38). Missions are
-planned/edited in a map-based **mission planner** modal (`openMissionPlanner` in
-`frontend/js/app.js`; shown at first run and from the mission-card edit pencil): geocode
-an address or paste decimal/DMS coordinates, GPS "use current location", a switchable
-topo/aerial/street basemap, and a long-press to drop/move a marker whose tooltip edits the
-mission name (FR-1, FR-9), and a **Radius of Concern** slider (discrete stops 10/20/50/100/200
-mi; stored as `radius_km`) that caps the upstream watershed: the orchestrator clips the basin to
-that disk before GEFS/REFS aggregation (`watershed/roc.py`, FR-3). The main-map watershed renders
-the kept (clipped) basin as before, the excluded remainder hatched, and the RoC as a fine dashed
-orange ring (`watershed.excluded_geometry` + top-level `roc` in the structured contract). Saving
-persists the spec to `localStorage` (FR-10) and re-fetches. The Open-Meteo
-adapter now also persists a per-hour display series (`IngestBundle.forecast_hourly`,
-display-only — never an engine input). Verified live end-to-end in-container.
+**Ensemble spine — the one fact that will mislead you.** NWS SCN 26-47 retires SREF **and** HREF
+on 2026-08-31; the spine already migrated to **GEFS** (global, per-member — the provider computes
+member-exceedance in-house because GEFS ships no probability product) and **REFS** (3 km RRFS
+Ensemble). The `sref/` and `href/` packages are **dead** — retained only so the M0.0 spikes still
+run, wired to nothing; post-cutover cleanup deletes them. Never add to them. Bundle/engine/threshold
+fields are `gefs_*`/`refs_*`, cadence 00/06/12/18Z. Cut points are a carried-over seeded baseline
+pending field calibration to the new ensembles.
 
-**Lightning Area of Concern (LAoC).** Lightning is a point/corridor estimate, not a
-basin-routed one (PRD §16.1, §13 principle 4), so its ensemble fields (`gefs_p_tstm`,
-`refs_p_lightning`) aggregate over a disk around the activity rather than the upstream
-watershed. The disk reuses `watershed/roc.py`'s `roc_disk` (the raw circle, *not* intersected
-with the basin); the orchestrator hands GEFS/REFS a separate `lightning_polygon` while flash
-flood keeps the watershed/RoC domain. The radius is an **app-wide user preference** (not
-per-mission): a modular prefs store (`uwx.prefs.v1` in `localStorage`, `loadPrefs`/`savePrefs`
-in `frontend/js/app.js`) configured from a **Settings** sheet opened by a persistent gear icon
-in the status bar. `postBriefing` folds `lightning_radius_km` into every request; the PWA draws
-the LAoC as a solid yellow ring (top-level `laoc` in the structured contract) and a legend item,
-without touching map zoom/pan. `mission_cache_key` folds in both `radius_km` and
-`lightning_radius_km`. A future version adds a trailhead point + linear route corridor (deferred).
+### Where the history lives
 
-**Latency follow-on (watershed warming).** Cold pour-point delineation (~3–15 s) was the
-dominant remaining briefing latency, and pre-caching whole basins is futile (every set of
-coordinates yields a slightly different watershed). Instead the planner warms it *the moment
-coordinates change*: dropping/moving/geocoding a point (or GPS/manual entry) fires a
-debounced `POST /v1/watershed/warm` (`frontend/js/app.js`), which `BriefingService.warm_watershed`
-runs on a small background `ThreadPoolExecutor` (`api_enable_warm`, default on), delineating the
-basin while the user finishes entering the mission. By the time they generate, the briefing's
-`delineate_cached(mission.lat, mission.lon)` hits the warm disk file. The quick user who
-generates mid-warm is handled by a **single-flight registry** in `watershed/cache.py`: the
-briefing *joins* the in-flight delineation instead of racing it (cache writes are atomic).
-Warming only fills a cache the briefing already used — engine output is unchanged.
+Every hardening pass, security-audit remediation, and deploy change has its own document under
+`docs/`. Read the relevant one before changing that subsystem — do not reconstruct the rationale
+from the code. Load `.claude/skills/project-history/SKILL.md` for the full index; the essentials:
 
-**Latency follow-on (GEFS ingest speed).** GEFS replaced SREF's pre-baked probability product with
-per-member grids, so a cold briefing fetches/decodes ~500 subsets (members × fhours × fields) — and
-every cfgrib decode was serialized on one global lock (eccodes is not thread-safe), so the 16-worker
-member fan-out decoded one-at-a-time. Three fixes: (1) **GEFS warming is on by default** — the
-scheduler *and* `deploy/deploy.sh` pre-warm the `gefs_warm_fhours` band (default f24–f120 / 6 h, the
-horizon GEFS owns beyond REFS), via a parallel **download-only** `gefs.warm_cycle` (no wasted decode
-at warm time); (2) each per-member GEFS **decode crops to the union of the watershed + LAoC bboxes
-at decode time** (`gefs.cache._decode_cropped`, returning a detached ~KB array, *not* the 16.5 MB
-global grid) — this happens **in-process by default** so the 16-way member fan-out and the LRU never
-retain full grids (retaining full grids in-process is what OOM-killed uvicorn on the ≤2 GB prod host
-→ nginx 502). The crop can *optionally* run in a spawn `ProcessPoolExecutor` owned by the API
-lifespan (`api_enable_decode_pool`, **opt-in / default OFF**; the pool path skips the compute lock —
-cross-process decode is eccodes-safe — and falls back in-process on a broken pool, NFR-6). **The
-pool is off by default because each spawn worker re-imports the scientific stack (xarray + cfgrib +
-regionmask/rasterio + timezonefinder) at ~300–500 MB RSS each, which OOMs a small host; only enable
-it where there is real RAM headroom.** Cropping at decode time is bit-identical to the old
-decode-full-then-crop-per-domain (NFR-4). (3) the decoded-grid LRU
-(`grib/cache.py`) is now **memory-budget-aware** (`decode_cache_max_bytes`, default ~128 MiB; with
-GEFS cropped at decode time this mainly bounds the larger REFS native grids) with a count backstop
-instead of a flat 48-entry cap. Engine output is unchanged — the union-crop-then-mask is
-bit-identical to decode-full-then-crop-per-domain (NFR-4).
+- **Design rationale per milestone:** `docs/m0.X/README.md`, spike reports in `docs/m0.0/`.
+- **Security audit + remediation:** `docs/Security Audit 2026-07-14.md`, the `docs/sa-*-workplan.md`
+  files, and the `docs/changelog-2026-07-{15,17,18}-sa-*.md` changelogs (SA-01 auth gate, SA-02
+  input/cache bounds, SA-03/04 refresh + cache keys, SA-05 vendored map libs + CSP, SA-06/09/13
+  deploy reproducibility + TLS, SA-08 PDF containment).
+- **Data quality:** `docs/code-review-2026-07-02.md` and the three `docs/changelog-2026-07-02-*.md`
+  files. A missing/stale/NaN/partial input must never read as benign — that principle is load-bearing
+  across ingest, the engine's DATA GAP drivers, and `confidence.yaml`.
+- **Deploy & hosting:** `docs/deployment-workflow.md`, `docs/changelog-2026-07-18-issue-132-host-hardening.md`,
+  `docs/changelog-2026-07-20-staging-deploy-hardening.md`, and the runbooks
+  (`docs/prod-rebuild-runbook-v0.7.1.md`, `docs/staging-rebuild-runbook-2026-07-20.md`).
+- **Feature changelogs:** hourly hazard series + time-aware phases
+  (`docs/changelog-2026-07-19-hourly-hazard-series.md`), unit localization (same date series).
 
-**Data-quality hardening (2026-07-02).** Following the pre-launch review
-(`docs/code-review-2026-07-02.md`; changelog `docs/changelog-2026-07-02-data-quality.md`),
-**data quality is a first-class value** end to end: a missing/stale/NaN/partial input is never
-allowed to read as benign. Concretely: zonal aggregates return `None` (never NaN) and refuse
-off-grid nearest-cell fallbacks; GEFS tolerates per-member failures behind a member quorum and
-is clamped to the real f240 horizon; REFS selection covers between-output hours by accumulation
-bucket and both ensembles enforce a freshness bound (`ensemble_max_age_h`, default 24 h) — the
-API cache token tracks the newest *available* cycle, not the wall clock; Open-Meteo fetches 16
-days, populates `convective_rate_in_per_hr`/`cape_jkg`/`wind_mph` (the slot fallback is live),
-and the precip booleans are tri-state (`None` = unknown ≠ dry — an unknown applies the GEFS
-Elevated band conservatively); NWS alerts/AFD degrade independently (`sources_ok["nws_afd"]`);
-the LAoC no longer needs the basin (a watershed failure doesn't silence lightning); the engine
-emits explicit "DATA GAP … unassessed, not low" drivers and `confidence.yaml` v1.1 floors
-confidence at Low when a hazard's primary driver was unavailable (`missing_primary_confidence`).
-`bundle_data_gaps()` (ingest/base.py) is the single gap-derivation source rendered as the
-SITREP "DATA GAPS" section and the structured contract's `data_quality` block. The PDF endpoint
-is hardened (typed sub-models in `api/models.py`, template escaping, a Playwright request gate,
-size/concurrency caps) and the refresh scheduler runs off the event loop (`asyncio.to_thread`).
-A second round (changelog `docs/changelog-2026-07-02-high-fixes.md`) closed the remaining
-review highs: the upstream trace probes external inflow at **every** node and carries
-first-class completeness (`UpstreamTrace.complete` → DATA GAP + flash-flood confidence capped
-at Moderate, `confidence.yaml` v1.2); the watershed cache is identical-point-only (6-decimal
-keys, TTL'd fallback entries, self-healing reads, resolve-before-write single-flight); NWS
-flood products are checked over the **basin** (sampled points, OR-merged with the point check);
-the lightning AFD ceiling applies only in REFS range (`lightning.yaml` v1.5); `heat_index_f`
-is the real NWS Rothfusz index from temp+RH (apparent temperature remains the cold/wet basis);
-the PWA persists the last briefing for offline review (`uwx.briefing.v1`, age-labeled) and the
-offline PDF handoff works; the API validates MissionSpec (CONUS bounds, window/radius caps,
-currency), bounds `_active`/warm queues, and rate-limits frame/pdf/warm per IP.
-
-**GEFS corrupt-subset resilience (2026-07-02).** A byte-range subset fetched while a `.grib2`
-was still publishing can be truncated (decodes to `EOFError`); a one-member hiccup previously
-sank the whole GEFS source and stuck there (changelog `docs/changelog-2026-07-02-gefs-resilience.md`).
-Now: the shared download path (`grib/idx.py`) validates GRIB2 framing (`GRIB`…`7777`, declared
-lengths, message count) via `validate_grib2_bytes` before a subset is accepted — a truncated
-download raises `TruncatedGribError` (a `ValueError`) so it never reaches the cache and the member
-degrades behind the quorum; `gefs/cache.py` self-heals any bad file already on disk (discard +
-re-fetch once); and `gefs_provider._member_sample` catches `EOFError`. Applies to REFS too (same
-download path). Engine output unchanged (NFR-4).
-
-**Mission-input & cache hardening (SA-02, 2026-07-14).** Following the pre-release security audit
-(`docs/Security Audit 2026-07-14.md`; workplan `docs/sa-02-hardening-workplan.md`), the public
-`/v1/briefing` surface is bounded end to end so unbounded mission input can no longer exhaust
-memory through count-only caches. Backend-only (nothing in `frontend/`): `MissionSpec` caps `name`
-(80), `route_note` (1000), `party_size` (1–200); the untyped `inputs: dict` is now a strict
-`HazardInputsSpec` (`extra="forbid"`, `allow_inf_nan=False`, ranged probabilities, known-hazard
-`member_support`) whose `to_dataclass()` reproduces the exact engine `HazardInputs` bit-identically
-(NFR-4, FR-25) — unknown keys / non-finite / out-of-range now return a **bounded 422** (an ASGI
-`_MaxBodySizeMiddleware` first rejects >64 KiB bodies with 413, and a `RequestValidationError`
-handler keeps non-finite-float errors serializable rather than 500). The offline replay path is
-feature-flagged (`api_allow_inputs_replay`, default on for CLI/dev; **the public beta sets it to
-0** → 403, killing the never-expiring static-entry vector); the briefing + result caches are now
-byte-budget-aware (`api_cache_max_bytes`) with a TTL on static entries (`api_static_entry_ttl_s`);
-and cold `/v1/briefing` cache **misses** are charged to a per-IP token bucket
-(`api_briefing_miss_rate_per_min`) while cache hits stay free (via a `get_briefing` `on_miss` hook).
-New settings live in `config.py` and are documented in `deploy/upstreamwx.env.example`; `/v1/health`
-echoes them. SA-04 (cache key omits mission metadata) is separate — these bounds only shrink its
-blast radius. Engine output unchanged (NFR-4).
-
-**Public-release access gate: anonymous fair-use sessions (SA-01, 2026-07-15).** The private beta
-stays behind a tailnet; the *public* release replaces "possession of the URL is the invitation"
-with an **app-issued per-client principal** (workplan `docs/SA-01-public-auth-workplan.md`). The gate
-authenticates a *client*, not a person — **no login, no personal data** — so cost/abuse budgets attach
-to identity instead of a bare IP (the audit's "IP-only throttling is weak identity"). `api/auth.py`
-mints a **stateless HMAC-SHA256 token** (random `pid`, no server session table) delivered as an
-**HttpOnly / Secure / SameSite=Lax cookie** (HttpOnly ⇒ a compromised CDN script (SA-05) can't read
-it; SameSite=Lax is the CSRF control; Secure ⇒ TLS is a prerequisite, SA-09). `POST /v1/session` mints
-it (per-IP rate-limited); the PWA calls it transparently on boot (`ensureSession()` in
-`frontend/js/app.js`, with a 401 re-mint/retry) — no UI. A pure-ASGI `_SessionMiddleware` fail-closes
-by path (every `/v1/*` except `health`/`session` needs a valid token, so a new route can't ship
-unauthenticated), and `require_session` hands each endpoint a typed `Principal`. `api/budget.py` charges
-**per-principal** (fairness → 429) and **global** (ceiling/circuit-breaker → 503, the daily model-spend
-cap logs a WARNING) rolling windows on cold briefings / framing / PDF / warm — **cache hits are free**;
-the existing per-IP token buckets (SA-02) remain the IP-aggregate layer beneath, defeating token
-rotation. Refresh registration is now capped **per principal** (`budget_active_per_principal`),
-delivering the "register only authorized principals" half of SA-03. Also folded in from SA-12: `/docs`
-off by default (`docs_enabled`) and the standalone `main()` binds loopback. **Secret-gated activation:**
-`api_auth_enabled` defaults **ON**, but the gate only ENFORCES when a signing secret is present
-(`auth_active()` = enabled ∧ secret) — so the secretless contexts (dev, CLI, the offline suite, the
-tailnet beta) run **open** with a startup WARNING instead of crashing, while the public host activates
-the gate simply by setting `UPSTREAMWX_SESSION_SECRET`. `api_auth_required=1` makes a secretless start
-**fail closed** (the public host sets it, so a config slip can't silently ship `/v1` open); `/v1/health`
-echoes `auth_active` so monitoring catches an accidentally-open host. In-process counters (single-worker
-deployment; the shared-store version is the same M0.1.1 upgrade the cache documents). Deferred:
-proof-of-work mint hardening (GA) and the `/v1/health` field trim. Does **not** fix SA-04 or SA-02
-(separate). Engine output unchanged (NFR-4).
-
-**Recurring-workload & cache-isolation hardening (SA-03 + SA-04, 2026-07-15).** The last two High
-findings targeted from the 2026-07-14 audit (workplan `docs/sa-03-04-hardening-workplan.md`;
-changelog `docs/changelog-2026-07-15-sa-03-04.md`). Both are **backend-only** and hold for an
-unauthenticated client; **engine output is unchanged (NFR-4)** — SA-04 changes a cache *key*, SA-03
-changes only *when/whether* a briefing regenerates. **SA-04:** the response cache key
-(`api/cache.py` `mission_cache_key`) previously omitted `name`/`party_size`/`route_note` while the
-cached briefing embeds the request's `Mission` and renders `mission.name`, so two users at the same
-place/window/activity/radii collided on one entry and the second was served the **first's mission
-name and presentation** (cross-user disclosure + cache poisoning). The key now folds them in as a
-collision-safe `repr((name, party_size, route_note))` — the audit's immediate fix (the stronger
-conditions/presentation split is deferred, workplan §6; SA-02 already bounds these fields so the lost
-cache-sharing is negligible). **SA-03:** `refresh_active` (`api/service.py`) re-ingested every
-registered in-range mission every cycle until its window ended, and `_active` was mutated from
-request + scheduler threads with no lock — so one request (window ≤10 days out, ≤7-day span) pinned
-~2 weeks of recurring work. Now the registry is **lock-guarded** (generation runs outside the lock);
-refresh is limited to **recently-viewed** missions (a `last_seen` bumped by every briefing hit/miss
-but *not* by a refresh — `api_active_refresh_ttl_s`, default 12 h ≈ two cycles — so a fire-and-forget
-request stops refreshing after the TTL, not after days); each pass has a **hard item + wall-clock
-budget** (`api_refresh_pass_max_items`/`_seconds`) and **shares the request `_gen_sem`**, yielding to
-interactive briefings on slot contention (`api_refresh_gen_wait_s`) so scheduled work never starves a
-real request; each regeneration is per-mission try/excepted so one bad mission can't sink the pass
-(NFR-6); and a per-pass `RefreshStats` (incl. a `failed` count) is logged and echoed on `/v1/health`
-(rec 7). SA-01
-already delivered the per-principal registration cap (the "register only authorized principals"
-half). The 256 registry cap is now a memory ceiling, not the work bound (the TTL + pass budget are).
-Full offline suite green (480); does **not** fold in SA-05/06 or the deferred conditions-cache split.
-
-**Supply-chain & browser-policy hardening: vendor the map libs + CSP (SA-05, 2026-07-17).** The last
-frontend High from the 2026-07-14 audit (workplan `docs/sa-05-vendor-map-libs-csp-workplan.md`; changelog
-`docs/changelog-2026-07-17-sa-05.md`). `frontend/index.html` loaded MapLibre GL (JS+CSS) and
-maplibre-contour from jsDelivr — two at a **floating `@5`** major, none with SRI — so a compromised CDN
-path or mutable major-version resolution could execute attacker code **in the app origin** (read
-`localStorage` mission/briefing data, hit billable `/v1/*`, alter the displayed posture). Fix: the libs are
-**vendored exact-pinned and served same-origin** (`frontend/vendor/maplibre-gl-5.24.0.{js,css}`,
-`maplibre-contour-0.1.0.js`; `crossorigin` dropped) — same-origin + `script-src 'self'` removes the
-third-party host from the trust path entirely (strictly stronger than CDN+SRI, and works with CDNs blocked)
-— and precached in `sw.js` so offline/CDN-blocked still renders. nginx now sends an **enforcing CSP**
-(`deploy/nginx/upstreamwx.conf` app + `landing.conf` apex): strict **`script-src 'self'`** (no CDN, no
-`unsafe-inline`, no `unsafe-eval`), the map's data planes narrowly enumerated (`connect-src`/`img-src`:
-`tiles.openfreemap.org`, `server.arcgisonline.com`, `s3.amazonaws.com`; Nominatim geocoder in
-`connect-src`), `worker-src 'self' blob:` for MapLibre's blob worker, and the one documented compromise
-`style-src 'self' 'unsafe-inline'` (MapLibre runtime styles + dynamic inline meter widths; `script-src`
-stays strict). The landing page is JS-free/self-contained → maximally strict `script-src 'none'`. The PDF
-template's ~400-line inline `<script>` is externalized to `frontend/pdf/briefing-pdf.js` (added to the
-`sitrep/pdf.py` server-render file-URI allow-list) so the served `?print=1` fallback also satisfies
-`script-src 'self'`. Both CSP `add_header` lines flag the shared-block overlap with PR B (SA-06/09 TLS).
-Verified with three headless-Chromium smoke passes (PWA+map, forced map+blob worker, served PDF template) —
-**0 CSP violations** each; server-side PDF render intact; suite **481 passed**, ruff clean. Engine output
-unchanged (NFR-4).
-
-**Deploy reproducibility, TLS/host validation & log redaction (SA-06 + SA-09 + SA-13, 2026-07-17).**
-Pre-public-beta hardening of the deploy layer and edge (workplan `docs/sa-06-09-13-hardening-workplan.md`;
-changelog `docs/changelog-2026-07-17-sa-06-09-13.md`). The **in-repo, offline-verifiable** parts landed;
-the host-only parts (root-owned atomic release dirs, certbot TLS, SBOM) are specified and deferred to a
-host pass (workplan §5). Engine output unchanged (NFR-4). **SA-06:** a committed **`uv.lock`** (the
-reproducibility keystone) + `deploy.sh` now installs with **`uv sync --frozen --no-dev`** (exact, prod-only,
-fails on a stale lock) instead of re-resolving; the **root execution of `.venv/bin/playwright install-deps`
-was removed** (Chromium OS libs come from `bootstrap.sh`'s root-owned apt manifest, and a new
-`_usable_chromium_present` helper checks for a browser without running any venv binary), closing the "root
-executes service-user-writable code" trust-boundary crossing; the uv installer is pinned to an exact
-version. **SA-09:** new `api_trusted_hosts` installs `TrustedHostMiddleware` outermost (a bad `Host` → 400;
-default off so dev/tailnet/TestClient are unchanged, loopback always allowed so `/v1/health` keeps working),
-and a new `DEPLOY_REQUIRE_HTTPS` deploy gate fails a public deploy without live HTTPS + HTTP→HTTPS redirect
-— the SA-01 `Secure` cookie is inert without TLS. **SA-13:** the scheduler's healthcheck-ping failure log is
-redacted (`scheme://host/<redacted>` + exception type only, no `exc_info`) so the secret ping token can't
-reach the journal. New settings echoed on `/v1/health`; documented in the deploy env examples. Full offline
-suite green (486). PR A (SA-05 CDN/CSP) is handed off separately and also edits nginx — coordinate the overlap.
-
-**PDF/Chromium render containment (SA-08, 2026-07-18).** Hardened the `/v1/briefing/pdf` surface, which
-renders client-supplied `BriefingResponse` JSON in headless Chromium (workplan `docs/sa-08-hardening-workplan.md`;
-changelog `docs/changelog-2026-07-18-sa-08.md`). Engine output unchanged (NFR-4). Three parts: (1) the
-`_MaxBodySizeMiddleware` now takes a **per-path cap map** and folds in `/v1/briefing/pdf` at its 2 MiB cap, so
-a chunked upload without `Content-Length` is **stream-rejected** (413) mid-body instead of fully buffered by
-the handler's `await request.body()`; (2) every broad `BriefingResponse` field carries a **generous** cap
-(`markdown` ≤ 256 KiB, lists ≤ 16–256, `sources_ok`/`*_series` cardinality ≤ 64, …) — orders of magnitude
-above real server output (the frozen contract still validates) so a hostile payload's list cardinality and
-string sizes are bounded and an over-cap field is a bounded 422, not a 500/render; (3) safe headless-hardening
-Chromium flags (`--disable-gpu/-extensions/-background-networking/-sync`) trim the render's surface (verified
-end-to-end). Chromium's native sandbox was **restored in the issue #132 host pass** (below). Disabling JS for
-the template is not feasible (it renders via `window.__BRIEFING__`). Full offline suite green (500).
-
-**Host-only deploy hardening scripted into the deploy layer (issue #132 — SA-06/07/08/09, 2026-07-18).** The
-live-host residuals from the 2026-07-14 audit are now scripted into `deploy/` so staging and prod get them
-identically and reproducibly (changelog `docs/changelog-2026-07-18-issue-132-host-hardening.md`). Engine output
-unchanged (NFR-4); the only product-code change is `sitrep/pdf.py`. **SA-06 (atomic releases):** `deploy.sh`
-builds each ref into a root-owned `releases/<sha>` (clean export + its own `uv sync --frozen` venv + per-release
-Chromium), atomically flips the `<app_dir>/current` symlink the service runs from, and **rolls the symlink back**
-on a failed `/v1/health` — the release tree is read-only to the runtime account, closing the last "runtime user
-influences what root runs" surface; the shared build/activate/prune engine lives in `deploy/_lib.sh`, and
-`bootstrap.sh` migrates an old in-place checkout aside. uv installer is checksum-verified + version-asserted; the
-Chromium revision is stamped into `version.json`. **SA-09:** the nginx `:443` block + HTTP→HTTPS redirect are
-version-controlled (marker regions toggled by `DEPLOY_TLS_ENABLE`), `certbot --webroot` issues/renews (no nginx
-rewrite), and a default server returns `444` for unknown Hosts. **SA-08:** the unit relaxes `RestrictNamespaces`
-to `user mnt pid net` and `pdf.py` drops `--no-sandbox` for the non-root service (re-added as root, or via
-`UPSTREAMWX_PDF_NO_SANDBOX`). **SA-07:** signed-tag verification at deploy, CI actions SHA-pinned, and a new CI
-`supply-chain` job (pip-audit + detect-secrets + CycloneDX SBOM). PR #137.
-
-**Briefing tab.** The PWA now has six primary tabs in this order: Overview, Map, Hazards,
-**Briefing**, Forecast, Resources. The Briefing tab renders the full Markdown SITREP
-(`BriefingResponse.markdown`) as formatted HTML using a zero-dependency in-browser converter
-(`renderMarkdown` / `_inlineFormat` in `frontend/js/app.js`) that handles headings, pipe
-tables, bullet lists, bold, and URLs. When Haiku framing is active (`b.framed === true`) a
-non-dismissible attribution banner appears above the text. The `markdown` field is now
-included in `to_structured()` (and therefore in the structured JSON contract and
-`sample-briefing.json`) rather than being spliced in separately by the service layer.
-
-**Hourly hazard series + time-aware phases (2026-07-19).** Each hazard card now graphs its driving
-quantity over mission time, and the phase assessments respond to the *hourly* forecast instead of the
-coarse approach/egress time estimate (changelog `docs/changelog-2026-07-19-hourly-hazard-series.md`).
-The providers stopped discarding the per-forecast-hour arrays they compute before the window-max
-collapse: `IngestBundle` carries the raw arrays (`gefs_*_hourly`/`refs_*_hourly` keyed by valid-time
-ISO, `heat_index_hourly`) plus a **display-only** `HazardSeries` (`build_hazard_series` resamples the
-sparse ensemble hours onto `ForecastHourly.hours_dt`, the shared mission clock — 6 h GEFS / 3 h REFS
-step-hold, per-hour `max` merge, gaps as `None` never `0`), and `to_structured` emits a per-hazard
-`series` block (`primary`/`secondary`/`bands`; heat/cold bands from the threshold YAML). The engine
-never reads any of it (`to_hazard_inputs` bit-identical, test-locked — FR-13, NFR-4). The PWA renders
-a self-contained inline-SVG chart per card via the extended `lineChart()` (bands, bold ensemble + faint
-overlay, null-gap breaks; CSP `script-src 'self'` intact): flash flood = ensemble + faint hourly precip
-overlay, lightning = ensemble-only, heat/cold = index line over threshold bands. For the phase math,
-`ingest/base.to_phase_hazard_inputs()` builds a per-phase `HazardInputs` by reducing the **local**
-hazards (heat max / cold coldest apparent temp / lightning max) over each phase's own hours, and
-`assess(..., phase_inputs=...)` (opt-in; `None` = byte-identical to before) evaluates each phase against
-its slice — threaded on the live path in `generate_briefing`. **Flash flood is deliberately left
-window-conservative** (upstream-watershed routing, §16.1 — earlier upstream rain arrives in-slot on a
-travel-time lag, so slicing would understate it). Phases tile the window, so the overall FR-19 `max` is
-unchanged for heat/cold and can only *lower* lightning when its peak sits in the sheltered technical span
-(not applicable there anyway, FR-14c). Offline suite green (512); frontend verified via headless Chromium.
-
-**Unit localization: US customary / metric (2026-07-20).** A Settings toggle chooses the display
-system app-wide (FR-9); the choice propagates through the whole briefing. The conversion is
-**display-only** — the engine, thresholds YAML, and all `HazardInputs` stay in native units
-(°F / inch / mph / km) so identical inputs still yield identical engine output (NFR-4, non-negotiable
-#2/#3). A new pure `units.py` (`Units` converter + range-aware `localize_units_text`) is threaded
-through the shared generation core: `generate_briefing`/`render_md`/`to_structured` take a `units`
-param (default `"us"` is byte-identical → goldens unchanged) and convert the metric cards, forecast
-table + `temp_series`/`wind_series`, hazard `series` lines + threshold bands, risk inputs, and the
-Markdown source-data drill-down; the engine-authored driver/logic/assumption prose is localized as
-text (so "80–90 °F" → "27–32 °C"). The structured contract echoes the system in a top-level `units`
-field and carries a `watershed.area_km2` companion beside `area_sq_mi` (RoC/LAoC rings already dual-emit
-km + mi). `MissionSpec.units` (Literal, default `us`) is folded into `mission_cache_key` and carried on
-the refresh registry so scheduled re-renders keep the system; `BriefingResponse.units` surfaces it; the
-CLI gains `--units`. Frontend: `prefs.units` (in `uwx.prefs.v1`) is sent with every `/v1/briefing`,
-and the PWA localizes the few labels it authors itself (chart titles, risk card, watershed area / ring
-readouts, the RoC/LAoC slider readouts + ticks, the About methodology matrices, and map contour/peak
-elevation ft↔m) — reading the briefing's `units` for data labels and the saved pref for chrome. Backend
-suite green (524 + new `test_units.py`); metric render verified end-to-end via headless Chromium.
-
-Deferred to **M0.1.1** (requires the always-on EC2 host; cannot be validated in an
-ephemeral container): the recurring GEFS/REFS scheduler **cadence** and the
-**cross-restart persistent cache**. The host-independent cores (on-demand GEFS/REFS
-processing, cache semantics, cycle arithmetic, a single refresh pass) are built and
-tested. **M0.5** (flesh out the PWA — offline cache timestamp UX FR-26/41, remaining
-timeline polish) is in progress; `STYLE_GUIDE.md` is the visual source of truth. **PDF
-export (FR-27)** is built server-side: `POST /v1/briefing/pdf` accepts the structured
-`BriefingResponse` the PWA already holds in memory, renders `frontend/pdf/briefing-pdf.html`
-via headless Chromium (Playwright, `sitrep/pdf.py`) with `window.__BRIEFING__` injected as
-an init script, and returns a clean `application/pdf` download — no browser URL chrome, no
-iOS print-preview trap. The client falls back to the localStorage → `?print=1` path when
-offline or the server endpoint is unavailable. The print template (light-theme, US Letter,
-running §17.3 reference-only footer in every page's `<tfoot>`) is precached by `sw.js`
-so the fallback path still works offline.
-
-**Staging-outage hardening: explicit deploy config, env-scoped uninstall, cache-root
-degradation (issues #146/#147/#148, 2026-07-20).** The 2026-07-20 staging 500s traced to a
-chain the deploy layer now forecloses (changelog
-`docs/changelog-2026-07-20-staging-deploy-hardening.md`; box procedure
-`docs/staging-rebuild-runbook-2026-07-20.md`). Key systemd fact: **`EnvironmentFile=` always
-overrides `Environment=` regardless of line order**, so the unit's data-dir pin now lives
-*inside* `ExecStart` via `/usr/bin/env` (nothing in the env file or a drop-in can divert it
-from `ReadWritePaths=`). `DEPLOY_CONFIG` is **required** (no silent prod default);
-bootstrap/deploy hard-block on a conflicting second install or a cross-owned data dir
-(`DEPLOY_ALLOW_COEXIST=1` opt-out); bootstrap comments out an active `UPSTREAMWX_DATA_DIR` in
-an existing env file, renders `uwx-ctl` correctly (`__SERVICE__` was never substituted), and no
-longer aborts on a same-file ctl-config re-install (#148). `uwx-ctl` gained **`uninstall`** —
-an env-scoped, self-contained teardown (typed confirmation; `--keep-data`/`--yes`) that leaves
-a coexisting env untouched. Backend (#147): `gefs`/`refs`/`sref` `cached_cycles` treat an
-unreadable cache root as empty (WARNING + cold-cache path) instead of 500ing the briefing, and
-`/v1/health` echoes `data_dir_ok`. Engine output unchanged (NFR-4).
-
-**Read-only-release-tree watershed fix + boot-enable + prod rebuild (2026-08-03).** Two defects
-found while promoting v0.7.0, plus the decision to rebuild the prod box. (1) **Watershed
-delineation wrote its HyRiver cache to the CWD** — under the SA-06 read-only release tree the
-service account cannot write there, so delineation failed on a deployed box while the briefing
-still rendered (an empty basin reads as benign — exactly the data-quality failure mode the
-2026-07-02 hardening exists to prevent). `watershed/_hyriver.py` now pins the cache under
-`settings.data_dir` (the one writable path, `ReadWritePaths=`); `huc.py`/`upstream.py` route
-through it. (2) **The deploy layer never enabled the API at boot** — `bootstrap.sh` enabled
-nginx only, and `deploy.sh` only ever `restart`s (it activates a release, it does not
-provision), so a provisioned box stayed `disabled` and would not survive a reboot; nothing would
-page, since the FR-12 dead-man's-switch is pinged *by* the process that would not be running.
-Production was found in exactly that state. `bootstrap.sh` now runs `systemctl enable`. (3) The
-prod box — grown incrementally since early development, provisioned pre-#132, with no
-`deploy/config.env` on the host (its deploy was therefore unreproducible) and two duplicate
-Let's Encrypt lineages — is being **rebuilt from bare metal** on a clean EC2 instance with
-`v0.7.1` as its first release: `docs/prod-rebuild-runbook-v0.7.1.md`. This is also the first
-end-to-end proof of the from-scratch `bootstrap.sh` path on production. The app carries **no
-durable state** (no DB, stateless HMAC sessions, `data_dir` is regenerable cache), so the
-migration payload is three secrets and a DNS record. Engine output unchanged (NFR-4).
-
-**Domain split (app subdomain + static landing).** The app (PWA + `/v1/*`, still
-single-origin) now lives at **`app.upstreamwx.com`**; the apex **`upstreamwx.com`** (+ `www`)
-serves a standalone **static landing page** from `landing/` — a vendored-token mirror of the
-PWA's About view (who-we-are, donate, condensed methodology) with the reference-only
-disclaimer and a prominent "Open the app" / install CTA. nginx grew a second server block
-(`deploy/nginx/landing.conf`, installed only when `DEPLOY_LANDING_SERVER_NAME` is set; the app
-block is `deploy/nginx/upstreamwx.conf`), config gained `DEPLOY_APP_SERVER_NAME` /
-`DEPLOY_LANDING_SERVER_NAME` / `DEPLOY_LANDING_ROOT`, and one multi-SAN cert covers both names.
-The frontend is origin-portable (relative `/v1/*` paths, `./` manifest scope), so the move
-needed no API rewiring or CORS; `manifest.webmanifest` `id` is pinned to the app origin and an
-in-app "Add to Home Screen" pill (status bar) captures `beforeinstallprompt`.
-
-For the "why" behind any milestone, read `docs/m0.X/README.md` and the spike reports
-in `docs/m0.0/`.
+**Standing invariant across all of it:** every one of those passes preserved engine output
+bit-identically (NFR-4). Any change that alters engine output is a deliberate, separately-justified
+act — not a side effect.
 
 ## Working agreements
 
-- **Branch:** develop on `claude/codebase-review-v0.5.0-xu0o7t` (create locally if
-  needed). Never push to a different branch without explicit permission. Commit with
+- **Branch:** develop on the `claude/<topic>-<suffix>` branch assigned for the task
+  (create locally if needed), never on `main`. Never push to a different branch than
+  the one assigned, without explicit permission. Commit with
   clear messages; push with `git push -u origin <branch>` (retry with backoff on
   network errors). **Do not open a PR unless explicitly asked.**
 - Prefer the **offline `--inputs` path** for development and testing — it is
