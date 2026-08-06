@@ -71,6 +71,69 @@ main {
 }
 
 /* ── 7.1 App header ────────────────────────────────────────────────── */
+/* ── Add-to-Home-Screen banner ─────────────────────────────────────────
+ * First child of .app and in normal flow (not fixed like the update/busy banners),
+ * so it pushes the header down rather than covering it — this one persists until
+ * dismissed, where those are transient. Brand-dim rather than a severity token: an
+ * install reminder must not read as a hazard (FR-35 severity ladder). */
+.install-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  padding-top: max(var(--space-2), env(safe-area-inset-top, 0px));
+  background: var(--color-brand-dim);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text);
+}
+.install-banner[hidden] { display: none; }
+.install-banner__text {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
+.install-banner__text b { color: var(--color-text); font-weight: 650; }
+/* Inline share glyph, sized to sit on the text baseline mid-sentence. */
+.install-banner__glyph {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.25em;
+  color: var(--color-brand);
+}
+.install-banner__cta {
+  flex-shrink: 0;
+  padding: 5px var(--space-3);
+  border: 1px solid var(--color-brand);
+  border-radius: var(--radius-pill);
+  background: var(--color-brand);
+  color: var(--color-text-inverse);
+  font-size: var(--text-caption);
+  font-weight: 650;
+  cursor: pointer;
+}
+.install-banner__cta:hover { background: var(--color-brand-strong); }
+.install-banner__close {
+  flex-shrink: 0;
+  /* 32px box on an 11px glyph — the dismiss must be comfortably tappable. */
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+.install-banner__close:hover { color: var(--color-text); }
+
 .app-header {
   position: relative;
   z-index: 2; /* sit above the scrolling view so the drop-shadow reads */
@@ -863,14 +926,16 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   cursor: pointer;
 }
 
-/* Layer-switcher control: stacked text buttons, active entry highlighted. */
-.map-layer-switcher { display: flex; flex-direction: column; min-width: 72px; }
+/* Layer-switcher control: stacked text buttons, active entry highlighted. The explicit
+   line-height keeps the four-item stack short enough to clear a small planner map. */
+.map-layer-switcher { display: flex; flex-direction: column; min-width: 68px; }
 .map-layer-switcher button {
-  display: block; width: 100%; padding: 5px 10px;
+  display: block; width: 100%; padding: 4px 8px;
   border: none; border-radius: 0;
   background: var(--color-surface) !important;
   color: var(--color-text-muted) !important;
   font-family: var(--font-sans); font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   text-align: left; cursor: pointer;
 }
 .map-layer-switcher button:hover { color: var(--color-text) !important; }
@@ -1275,7 +1340,10 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   background: var(--color-surface);
   border: 1px solid var(--color-border-strong);
   overflow: hidden;
-  padding-bottom: env(safe-area-inset-bottom);
+  /* All four insets: full-bleed at 100dvh, the sheet otherwise runs under the status bar
+     when installed to the Home Screen, and under the notch in landscape. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right)
+           env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
 @media (min-width: 768px) {
   .mp-sheet {
@@ -1284,11 +1352,22 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
     box-shadow: var(--shadow-pop);
   }
 }
+/* Scrollable middle. The map is the only flexible row, so it absorbs whatever the
+   trimmed chrome leaves; when even the minimums don't fit (short viewport, or the
+   time fields stacked) this scrolls rather than collapsing the map. */
+.mp-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 .mp-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-2) var(--space-4);
   border-bottom: 1px solid var(--color-border);
 }
 .mp-bar__title { margin: 0; font-size: var(--text-h2); }
@@ -1301,11 +1380,11 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   padding: var(--space-1);
   cursor: pointer;
 }
-.mp-search { display: flex; gap: var(--space-2); padding: var(--space-3) var(--space-4) var(--space-2); }
+.mp-search { display: flex; gap: var(--space-2); padding: var(--space-2) var(--space-4); }
 .mp-search__input {
   flex: 1;
   min-width: 0;
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-3);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
@@ -1313,7 +1392,8 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   font-size: 16px; /* ≥16px suppresses iOS auto-zoom on focus */
 }
 .mp-search__go {
-  padding: var(--space-2) var(--space-3);
+  flex: none;
+  padding: 7px var(--space-3);
   background: var(--color-brand-dim);
   color: var(--color-brand);
   border: 1px solid transparent;
@@ -1325,12 +1405,18 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   min-height: var(--lh-caption);
   padding: 0 var(--space-4);
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
+/* Reserve no vertical space until there is actually a message to show — on a small
+   phone that row is pure map height. */
+.mp-search__status:empty { display: none; }
 .mp-search__status.is-error { color: var(--color-warn); }
 .mp-map {
   flex: 1;
-  min-height: 0;
+  /* Floor the map so a short viewport scrolls the body instead of squeezing the map
+     down to a sliver (it was ~120 pt on a 393 pt iPhone in Safari). */
+  min-height: 180px;
   /* Override the global `.maplibregl-map { width: 100% }` rule: on this element the
    * horizontal margins would otherwise stack on top of a full-parent-width box and push
    * the map past the sheet's right edge (issue #117). `auto` lets the flex cross-axis
@@ -1344,52 +1430,89 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 .mp-hint {
   margin: 0;
-  padding: var(--space-2) var(--space-4) 0;
+  padding: 6px var(--space-4) 0;
   font-size: var(--text-caption);
   line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 .mp-fields {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: var(--space-2) var(--space-3);
-  padding: var(--space-3) var(--space-4) 0;
-}
-.mp-fields label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4) 0;
+}
+.mp-fields__row {
+  display: grid;
+  /* minmax(0, …) — without it a grid track is floored at its item's min-content width,
+     and a datetime-local's is wide enough to push the field past the sheet's edge. */
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-2) var(--space-3);
+  align-items: center;
+}
+.mp-fields__row--time { grid-template-columns: minmax(0, 1fr); }
+/* Wide enough for the sheet to give each time field a column that fits the full
+   locale-formatted value — pair them back up. */
+@media (min-width: 560px) {
+  .mp-fields__row--time { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+}
+.mp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-secondary);
 }
+/* Wide enough for the longest label ("Activity"), so the select and both time inputs
+   share one left edge. */
+.mp-field__label { flex: none; min-width: 40px; }
 .mp-fields select,
 .mp-fields input[type="datetime-local"] {
-  padding: var(--space-2) var(--space-3);
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  padding: 7px var(--space-2);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
   color: var(--color-text);
   font-size: 16px; /* ≥16px suppresses iOS auto-zoom on focus */
 }
-.mp-fields__check { flex-direction: row; align-items: center; gap: var(--space-2); }
-.mp-fields__check input { width: auto; }
+.mp-fields__check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
+.mp-fields__check input { width: auto; flex: none; }
 
 /* Radius of Concern (FR-3): discrete, non-linear slider above the actions. */
-.mp-roc { padding: var(--space-3) var(--space-4) 0; }
+.mp-roc { padding: var(--space-2) var(--space-4) 0; }
 .mp-roc__head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
 }
-.mp-roc__label { font-size: var(--text-caption); color: var(--color-text-secondary); }
+/* Explicit caption line-heights throughout the sheet: these spans would otherwise
+   inherit the 22 px body leading around 11 px text and pad every row by ~6 px. */
+.mp-roc__label {
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  color: var(--color-text-secondary);
+}
 .mp-roc__value {
   font-size: var(--text-label);
+  line-height: var(--lh-caption);
   font-weight: 600;
   color: var(--sev-high);
 }
 .mp-roc__slider {
   width: 100%;
-  margin: var(--space-2) 0 4px;
+  margin: 6px 0 2px;
   appearance: none;
   -webkit-appearance: none;
   background: transparent;
@@ -1427,23 +1550,42 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   display: flex;
   justify-content: space-between;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 .mp-roc__hint {
-  margin: 4px 0 0;
+  margin: 2px 0 0;
   font-size: var(--text-caption);
   line-height: var(--lh-caption);
   color: var(--color-text-muted);
 }
 
-.mp-actions { display: flex; gap: var(--space-3); padding: var(--space-3) var(--space-4); }
+/* Pinned action bar. 10 px padding on --text-body keeps both buttons at the 44 pt iOS
+   touch minimum while giving the map back the height the old 12 px pair spent. */
+.mp-actions {
+  display: flex;
+  flex: none;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
 .mp-actions .btn-ghost,
-.mp-actions .btn-primary { flex: 1; margin: 0; }
+.mp-actions .btn-primary { flex: 1; margin: 0; padding: 10px var(--space-2); }
+/* Transparent border so the ghost button's 1 px outline doesn't make it the taller of
+   the pair. */
+.mp-actions .btn-primary { border: 1px solid transparent; }
 
 /* Settings modal — reuses the mp-sheet/mp-roc chrome; the LAoC slider is yellow to match
    its map ring (distinct from the orange RoC/phase sliders). Yellow is scoped by ID so the
    approach/egress sliders remain orange. */
-.settings-body { padding-bottom: var(--space-2); }
+/* Scrolls for the same reason .mp-body does: four slider blocks overflow a short phone. */
+.settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: var(--space-2);
+}
 
 /* US/metric segmented toggle — two equal-width buttons; the active one carries the brand
    fill. Styled off aria-checked so the a11y state and the visual state can never drift. */
@@ -1478,19 +1620,202 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 #settings-laoc::-moz-range-thumb { background: #facc15; }
 #settings-laoc:focus-visible { outline-color: #facc15; }
 
+/* ── 7.17 iOS Add-to-Home-Screen walkthrough ───────────────────────────
+ * Safari's share menu can't be opened from script, so the install is demonstrated.
+ * The carousel is a scroll-snap track: the horizontal swipe is native scrolling, which
+ * is why there are no touch handlers here — only snap points and a hidden scrollbar. */
+.ios-guide {
+  position: fixed;
+  inset: 0;
+  z-index: 120; /* above the planner/settings sheets (110) — it can be opened from them */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: max(var(--space-4), env(safe-area-inset-top, 0px))
+           max(var(--space-4), env(safe-area-inset-right, 0px))
+           max(var(--space-4), env(safe-area-inset-bottom, 0px))
+           max(var(--space-4), env(safe-area-inset-left, 0px));
+  background: rgba(4, 6, 10, 0.88);
+}
+.ios-guide[hidden] { display: none; }
+.ios-guide__card {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-width: 420px;
+  /* Height follows the content rather than filling the overlay: the screenshots are
+     square, so a fixed-height card would pad ~150 px of dead space above and below an
+     image whose width is already the binding constraint. The slides live in one flex
+     row, so the track is as tall as the tallest of them and the card does not resize
+     as you swipe. max-height is the backstop for a short (landscape) viewport. */
+  height: auto;
+  max-height: 100%;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+.ios-guide__bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+.ios-guide__title { margin: 0; font-size: var(--text-h2); }
+
+/* Positioning context for the nudge arrow, and the flex row that the track fills. */
+.ios-guide__viewport { position: relative; flex: 0 1 auto; min-height: 0; }
+.ios-guide__track {
+  display: flex;
+  height: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scroll-snap-type: x mandatory;
+  overscroll-behavior-x: contain; /* a swipe past the last slide must not navigate back */
+  scrollbar-width: none;
+}
+.ios-guide__track::-webkit-scrollbar { display: none; }
+.ios-guide__track:focus-visible { outline: 2px solid var(--color-brand); outline-offset: -2px; }
+.ios-guide__slide {
+  flex: 0 0 100%;
+  scroll-snap-align: center;
+  scroll-snap-stop: always; /* one swipe = one step, never skip past a step */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  /* Centres the caption when its screenshot is missing; a present screenshot is
+     flex: 1 and fills the slide, so this is a no-op in the normal case. */
+  justify-content: center;
+  gap: var(--space-3);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+/* Intrinsic sizing capped by the box — correct for any aspect, not just the square
+   crops in use, and it never stretches a small image up to fill. On a phone the width
+   is what binds; max-height only comes into play when the card hits its own cap. */
+.ios-guide__shot {
+  flex: 0 1 auto;
+  min-height: 0;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  /* Not `max-height: 100%` — the card is auto-height, so a percentage here resolves
+     against an indefinite height and never binds (the image then overflows a short
+     landscape viewport). Subtract the card's own chrome from the viewport instead:
+     ~196 px of header + caption + dots + padding, plus the 32 px overlay margin. */
+  max-height: calc(100dvh - 230px);
+  object-fit: contain;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  background: var(--color-surface-2);
+}
+.ios-guide__shot[hidden] { display: none; }
+.ios-guide__cap {
+  flex: none;
+  /* Reserve the step label plus two lines on every slide. The slides are centred, so a
+     caption that wraps where its neighbours don't would sit its screenshot ~11 px higher
+     — visible as a jiggle mid-swipe. Sized from the tokens, not a magic number. */
+  min-height: calc(var(--lh-caption) + 2px + 2 * var(--lh-body));
+  text-align: center;
+  font-size: var(--text-body);
+  line-height: var(--lh-body);
+  color: var(--color-text-secondary);
+}
+.ios-guide__cap b { color: var(--color-text); font-weight: 650; }
+.ios-guide__step {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--text-caption);
+  line-height: var(--lh-caption);
+  font-weight: 650;
+  letter-spacing: var(--tracking-wide);
+  text-transform: uppercase;
+  color: var(--color-brand);
+}
+
+/* Swipe nudge. Pulses until the user moves the carousel (JS adds .is-quiet), and is
+   hidden outright on the last slide — by then there is nothing to nudge toward. */
+.ios-guide__next {
+  position: absolute;
+  top: 50%;
+  right: var(--space-2);
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 50%;
+  background: var(--color-overlay);
+  color: var(--color-brand);
+  cursor: pointer;
+}
+.ios-guide__next[hidden] { display: none; }
+.ios-guide__next-glyph { width: 22px; height: 22px; }
+@media (prefers-reduced-motion: no-preference) {
+  .ios-guide__next { animation: uwx-swipe-nudge 1.9s var(--ease) infinite; }
+  /* Keep the translateY centring inside the keyframes — transform is not additive. */
+  @keyframes uwx-swipe-nudge {
+    0%, 100% { transform: translate(0, -50%); opacity: 0.6; }
+    50%      { transform: translate(5px, -50%); opacity: 1; }
+  }
+  .ios-guide__next.is-quiet { animation: none; opacity: 0.75; }
+}
+
+.ios-guide__dots {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--color-border);
+}
+.ios-guide__dot {
+  /* 8px dot in a 24px hit box — the dot is decorative-sized, the target is not. */
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ios-guide__dot::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+  transition: background var(--dur) var(--ease), transform var(--dur) var(--ease);
+}
+.ios-guide__dot.is-active::before { background: var(--color-brand); transform: scale(1.25); }
+@media (prefers-reduced-motion: reduce) {
+  .ios-guide__dot::before { transition: none; }
+}
+
 /* Mission name field — sits above the search bar, separated by a thin rule. */
 .mp-name-field {
-  padding: var(--space-3) var(--space-4) var(--space-2);
+  padding: var(--space-2) var(--space-4);
 }
 .mp-name-field__label {
   display: block;
   font-size: var(--text-caption);
+  line-height: var(--lh-caption);
   color: var(--color-text-secondary);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 .mp-name-field__input {
   width: 100%;
-  padding: var(--space-2) var(--space-3);
+  padding: 7px var(--space-3);
   background: var(--color-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: var(--radius-md);
