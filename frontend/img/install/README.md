@@ -15,10 +15,13 @@ recapture on an iOS version with a different toolbar, update both together.
 
 ## Spec
 
-- **Format** JPEG. These are mostly iOS's translucent blurred menu surfaces,
-  which PNG encodes badly — PNG came out 3–4× larger for identical output.
-  Quality 86 with 4:2:2 chroma; artifacts are invisible once downscaled into the
-  slide.
+- **Format** **progressive** JPEG, quality 86, 4:2:2 chroma. PNG encodes these
+  badly — they are mostly iOS's translucent blurred menu surfaces, and PNG came
+  out 3–4× larger for identical output. Progressive is non-negotiable and also
+  ~5% smaller here: a *baseline* JPEG paints top-down, so on a slow link a
+  half-arrived screenshot renders as a band of image over blank space and reads
+  as broken. Progressive paints a soft full frame that sharpens. In Pillow:
+  `im.save(p, quality=86, optimize=True, subsampling=1, progressive=True)`.
 - **Aspect** square (1:1), cropped to the relevant part of the screen. The card
   is laid out for it: it sizes to its content, so the image width binds and the
   caption sits directly beneath with no dead space. Sizing is intrinsic

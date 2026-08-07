@@ -1696,7 +1696,9 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
 }
 /* Intrinsic sizing capped by the box — correct for any aspect, not just the square
    crops in use, and it never stretches a small image up to fill. On a phone the width
-   is what binds; max-height only comes into play when the card hits its own cap. */
+   is what binds; max-height only comes into play when the card hits its own cap.
+   The width/height attributes in the markup reserve this box before the first byte
+   arrives, so the caption does not jump when the image lands. */
 .ios-guide__shot {
   flex: 0 1 auto;
   min-height: 0;
@@ -1714,6 +1716,23 @@ details[open] .hazard-detail__chev { transform: rotate(180deg); }
   background: var(--color-surface-2);
 }
 .ios-guide__shot[hidden] { display: none; }
+/* Until the image lands, the reserved box pulses so it reads as loading. The screenshots
+   are progressive JPEGs, so a slow link then paints a soft full frame that sharpens —
+   never the top-down half-frame a baseline JPEG gives, which reads as a broken image. */
+/* Reserve the box before the first byte. The width/height attributes alone can't do it:
+   this rule's `width: auto` is an author style and beats the attributes' presentational
+   hint, so an unloaded image collapses to its 0×0 intrinsic size. Pinning width to 100%
+   while loading lets the browser derive the ratio from the attributes — general to any
+   aspect, and the loaded state reverts to intrinsic sizing at the same used size, so
+   nothing reflows when the image lands. */
+.ios-guide__shot:not(.is-loaded) { width: 100%; height: auto; border-style: dashed; }
+@media (prefers-reduced-motion: no-preference) {
+  .ios-guide__shot:not(.is-loaded) { animation: uwx-shot-loading 1.4s var(--ease) infinite; }
+  @keyframes uwx-shot-loading {
+    0%, 100% { background-color: var(--color-surface-2); }
+    50%      { background-color: var(--color-surface-3); }
+  }
+}
 .ios-guide__cap {
   flex: none;
   /* Reserve the step label plus two lines on every slide. The slides are centred, so a
