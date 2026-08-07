@@ -3404,6 +3404,7 @@ function syncIosGuide() {
   // Nothing left to nudge toward on the last slide.
   next.hidden = i >= IOS_GUIDE_SLIDES - 1;
   next.classList.toggle("is-quiet", _iosGuideMoved);
+  loadIosShotsAround(i);
 }
 
 /* The slides carry `data-src`, not `src`, so the screenshots are fetched the first time
@@ -3411,11 +3412,25 @@ function syncIosGuide() {
  * one) never see this card, and the files are the heaviest assets in the app. It also
  * means the error listener is attached before the load starts, so a missing file can
  * never slip past it; the `complete`-with-zero-width test then only has to cover a
- * reopen after an earlier failure. */
-function hideMissingIosShots() {
-  for (const img of document.querySelectorAll(".ios-guide__shot")) {
-    if (img.dataset.src && !img.getAttribute("src")) img.src = img.dataset.src;
-    if (img.complete && img.naturalWidth === 0) img.hidden = true;
+ * reopen after an earlier failure.
+ *
+ * Load the current slide and the next one only. Kicking off all three at once made them
+ * contend for bandwidth on a slow link, so the slide actually on screen finished last —
+ * it rendered as a part-drawn image, which reads as broken rather than as loading. One
+ * slide ahead is enough that a forward swipe lands on a ready image. */
+function loadIosShotsAround(i) {
+  const shots = [...document.querySelectorAll(".ios-guide__shot")];
+  for (const n of [i, i + 1]) {
+    const img = shots[n];
+    if (img && img.dataset.src && !img.getAttribute("src")) img.src = img.dataset.src;
+  }
+  for (const img of shots) {
+    // An <img> with no src reports complete === true and naturalWidth === 0, which is
+    // indistinguishable from a 404 — so skip the ones not requested yet, or deferring a
+    // slide would permanently hide it as "missing".
+    if (!img.getAttribute("src") || !img.complete) continue;
+    if (img.naturalWidth === 0) img.hidden = true;       // missing file (see the README)
+    else img.classList.add("is-loaded");                 // already cached — no fade-in
   }
 }
 
@@ -3424,7 +3439,7 @@ function openIosGuide() {
   if (!modal || !track) return;
   _iosGuideMoved = false;
   modal.hidden = false;
-  hideMissingIosShots();
+  loadIosShotsAround(0);
   if (next) next.innerHTML = icon("chevron_right", "ios-guide__next-glyph");
   // Start at slide 1 without animating in from wherever a previous open left it.
   goToIosSlide(0, { smooth: false });
@@ -3454,6 +3469,7 @@ function initIosGuide() {
   // caption alone still reads as a usable instruction (see img/install/README.md).
   for (const img of track.querySelectorAll(".ios-guide__shot")) {
     img.addEventListener("error", () => { img.hidden = true; });
+    img.addEventListener("load", () => img.classList.add("is-loaded"));
   }
 
   // rAF-coalesced: scroll fires far more often than the dots need repainting.

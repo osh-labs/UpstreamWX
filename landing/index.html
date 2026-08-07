@@ -51,14 +51,17 @@
         <p class="hero__beta-note">Free &middot; No account required &middot; Works in your browser</p>
       </header>
 
-      <!-- App screenshot — live example of the Map view with upstream watershed. -->
+      <!-- App screenshot — live example of the Map view with upstream watershed.
+           Progressive JPEG, sized to exactly 3x the 250x540 CSS px .screenshot renders at.
+           Progressive matters on a slow link: a baseline JPEG paints top-down, so a
+           half-arrived hero reads as broken rather than as loading. -->
       <figure class="screenshot-fig">
         <img
           class="screenshot"
-          src="images/app-screenshot.png"
+          src="images/app-screenshot.jpg"
           alt="UpstreamWX map view showing the upstream watershed for Pettyjohn's Cave on a dark topo basemap"
-          width="1284"
-          height="2778"
+          width="749"
+          height="1620"
           loading="lazy"
         />
       </figure>
